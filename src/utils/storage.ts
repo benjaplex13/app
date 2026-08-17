@@ -91,6 +91,32 @@ export function registerUser(name: string, email: string, password: string, home
   return { user: newUser, code };
 }
 
+export function loginUser(email: string, password: string): { user: User; token: string } {
+  const users = getAllUsers();
+  const normalizedEmail = email.trim().toLowerCase();
+  const user = users.find(u => u.email === normalizedEmail);
+
+  if (!user) {
+    throw new Error('Credenciales incorrectas o usuario no registrado.');
+  }
+
+  if (user.passwordHash && user.passwordHash !== hashPassword(password)) {
+    throw new Error('Contraseña incorrecta.');
+  }
+
+  if (!user.isVerified) {
+    const error: any = new Error('Tu cuenta requiere activación previa.');
+    error.data = { requiresVerification: true };
+    throw error;
+  }
+
+  // Ensure initial seed data exists for user
+  seedUserDataIfEmpty(user.id, user.name, user.homeCurrency);
+  saveActiveSession(user.id, user.email);
+  const token = 'rumbio_jwt_local_' + btoa(unescape(encodeURIComponent(JSON.stringify({ id: user.id, email: user.email, name: user.name })))) + '.' + Date.now();
+  return { user, token };
+}
+
 export function verifyUserCode(email: string, code: string): User {
   const users = getAllUsers();
   const normalizedEmail = email.trim().toLowerCase();
