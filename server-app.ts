@@ -972,6 +972,34 @@ app.get('/api/trips', verifyAuth, async (req: AuthenticatedRequest, res: Respons
   }
 });
 
+// 10b. Trips: Get a single specific trip (enforces user_id = req.user.id)
+app.get('/api/trips/:id', verifyAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const supabase = getSupabase();
+    const tripId = req.params.id;
+    const userId = req.user!.id;
+
+    const { data: tripRow, error } = await supabase
+      .from('trips')
+      .select('*')
+      .eq('id', tripId)
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    if (!tripRow) {
+      return res.status(404).json({ error: 'Viaje no encontrado o no tienes permiso para acceder a él.' });
+    }
+
+    res.json(mapTripFromDb(tripRow));
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Error al cargar el viaje.' });
+  }
+});
+
 // 11. Trips: Create or Update trip (enforces user_id = req.user.id)
 app.post('/api/trips', verifyAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
