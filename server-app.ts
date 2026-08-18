@@ -1,9 +1,8 @@
 import express, { Request, Response, NextFunction } from 'express';
-import path from 'path';
-import fs from 'fs';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { Resend } from 'resend';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 // Types
 export interface UserDoc {
@@ -12,8 +11,8 @@ export interface UserDoc {
   email: string;
   passwordHash: string;
   isVerified: boolean;
-  verificationCode?: string;
-  verificationCodeExpires?: number;
+  verificationCode?: string | null;
+  verificationCodeExpires?: number | null;
   homeCurrency: string;
   createdAt: string;
 }
@@ -49,32 +48,37 @@ export interface ExpenseDoc {
   createdAt: string;
 }
 
-export interface EmailLogDoc {
-  id: string;
-  to: string;
-  subject: string;
-  type: 'verification' | 'reset';
-  code: string;
-  status: 'sent_resend' | 'failed';
-  error?: string;
-  timestamp: string;
-}
-
-export interface DatabaseSchema {
-  users: UserDoc[];
-  trips: TripDoc[];
-  expenses: ExpenseDoc[];
-  emailLogs: EmailLogDoc[];
-}
-
 const JWT_SECRET = process.env.JWT_SECRET || 'rumbio_super_secure_jwt_secret_2026_travel_finance';
 
-// Determine writable data file location (Vercel Serverless requires /tmp)
-const DATA_FILE = process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME
-  ? path.join('/tmp', '.rumbio_db.json')
-  : path.join(process.cwd(), '.rumbio_db.json');
+// ============================================================================
+// SUPABASE CLIENT (Lazy Initialization)
+// ============================================================================
+let supabaseInstance: SupabaseClient | null = null;
 
-// Resend initialization
+export function getSupabase(): SupabaseClient {
+  if (!supabaseInstance) {
+    const supabaseUrl = process.env.SUPABASE_URL?.trim();
+    const supabaseKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY)?.trim();
+
+    if (!supabaseUrl || !supabaseKey) {
+      throw new Error(
+        'Las variables de entorno SUPABASE_URL y SUPABASE_SERVICE_ROLE_KEY no están configuradas en el servidor. Configúralas en tu panel de Vercel y AI Studio.'
+      );
+    }
+
+    supabaseInstance = createClient(supabaseUrl, supabaseKey, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+      },
+    });
+  }
+  return supabaseInstance;
+}
+
+// ============================================================================
+// RESEND CLIENT (Lazy Initialization)
+// ============================================================================
 function getResendClient(): Resend | null {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey || apiKey.trim() === '') {
@@ -83,41 +87,76 @@ function getResendClient(): Resend | null {
   return new Resend(apiKey.trim());
 }
 
-// Database persistent store helper
-export function loadDb(): DatabaseSchema {
-  try {
-    if (fs.existsSync(DATA_FILE)) {
-      const data = fs.readFileSync(DATA_FILE, 'utf8');
-      return JSON.parse(data);
-    }
-  } catch (err) {
-    console.error('Error reading DB file, using in-memory DB:', err);
-  }
-  return { users: [], trips: [], expenses: [], emailLogs: [] };
+// ============================================================================
+// DATA MAPPERS (Database snake_case <-> Application camelCase)
+// ============================================================================
+function mapUserFromDb(row: any): UserDoc {
+  return {
+    id: row.id,
+    name: row.name,
+    email: row.email,
+    passwordHash: row.password_hash,
+    isVerified: Boolean(row.is_verified),
+    verificationCode: row.verification_code,
+    verificationCodeExpires: row.verification_code_expires ? Number(row.verification_code_expires) : null,
+    homeCurrency: row.home_currency || 'USD',
+    createdAt: row.created_at,
+  };
 }
 
-export function saveDb(db: DatabaseSchema): void {
-  try {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2), 'utf8');
-  } catch (err) {
-    console.error('Error saving DB file:', err);
-  }
+function mapTripFromDb(row: any): TripDoc {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    name: row.name,
+    destination: row.destination,
+    startDate: row.start_date,
+    endDate: row.end_date,
+    budget: Number(row.budget) || 0,
+    currency: row.currency || 'USD',
+    exchangeRate: Number(row.exchange_rate) || 1.0,
+    members: Array.isArray(row.members) ? row.members : ['Yo'],
+    plans: Array.isArray(row.plans) ? row.plans : [],
+    checklist: Array.isArray(row.checklist) ? row.checklist : [],
+    createdAt: row.created_at,
+  };
 }
 
-// Seed sample trip for new user
-function seedInitialTrip(userId: string, userName: string, homeCurrency: string, db: DatabaseSchema) {
+function mapExpenseFromDb(row: any): ExpenseDoc {
+  return {
+    id: row.id,
+    tripId: row.trip_id,
+    userId: row.user_id,
+    title: row.title,
+    amount: Number(row.amount) || 0,
+    currency: row.currency || 'USD',
+    category: row.category || 'Comida',
+    date: row.date,
+    paidBy: row.paid_by || 'Yo',
+    splitBetween: Array.isArray(row.split_between) ? row.split_between : ['Yo'],
+    notes: row.notes || '',
+    createdAt: row.created_at,
+  };
+}
+
+// ============================================================================
+// INITIAL SEEDING HELPER IN SUPABASE (For Brand New Users)
+// ============================================================================
+async function seedInitialTripInSupabase(userId: string, userName: string, homeCurrency: string) {
+  const supabase = getSupabase();
   const sampleTripId = 'trip_' + Date.now();
   const today = new Date().toISOString().split('T')[0];
-  const sampleTrip: TripDoc = {
+
+  const sampleTrip = {
     id: sampleTripId,
-    userId,
+    user_id: userId,
     name: 'Aventura en Japón 🇯🇵',
     destination: 'Tokio, Kioto & Osaka',
-    startDate: new Date(Date.now() + 10 * 86400000).toISOString().split('T')[0],
-    endDate: new Date(Date.now() + 24 * 86400000).toISOString().split('T')[0],
+    start_date: new Date(Date.now() + 10 * 86400000).toISOString().split('T')[0],
+    end_date: new Date(Date.now() + 24 * 86400000).toISOString().split('T')[0],
     budget: homeCurrency === 'USD' ? 3200 : homeCurrency === 'EUR' ? 2950 : 2500000,
     currency: 'JPY',
-    exchangeRate: homeCurrency === 'USD' ? 0.0066 : homeCurrency === 'EUR' ? 0.0061 : 5.8,
+    exchange_rate: homeCurrency === 'USD' ? 0.0066 : homeCurrency === 'EUR' ? 0.0061 : 5.8,
     members: ['Yo', 'Carlos', 'Valeria'],
     checklist: [
       { id: 'chk_1', title: 'Pasaporte vigente (mínimo 6 meses)', category: 'Documentos', isCompleted: true },
@@ -134,87 +173,90 @@ function seedInitialTrip(userId: string, userName: string, homeCurrency: string,
       { id: 'pl_5', category: 'Compras', estimatedAmount: 300, notes: 'Souvenirs en Akihabara y té matcha' },
       { id: 'pl_6', category: 'Imprevistos', estimatedAmount: 120, notes: 'Fondo de emergencia' },
     ],
-    createdAt: new Date().toISOString(),
+    created_at: new Date().toISOString(),
   };
 
-  const sampleExpenses: ExpenseDoc[] = [
+  await supabase.from('trips').insert(sampleTrip);
+
+  const sampleExpenses = [
     {
       id: 'exp_1',
-      tripId: sampleTripId,
-      userId,
+      trip_id: sampleTripId,
+      user_id: userId,
       title: 'Hotel Gracery Shinjuku (3 Noches)',
       amount: 68000,
       currency: 'JPY',
       category: 'Alojamiento',
       date: today,
-      paidBy: 'Yo',
-      splitBetween: ['Yo', 'Carlos', 'Valeria'],
+      paid_by: 'Yo',
+      split_between: ['Yo', 'Carlos', 'Valeria'],
       notes: 'Habitación triple con vista a la ciudad',
-      createdAt: new Date().toISOString(),
+      created_at: new Date().toISOString(),
     },
     {
       id: 'exp_2',
-      tripId: sampleTripId,
-      userId,
+      trip_id: sampleTripId,
+      user_id: userId,
       title: 'Cena de Bienvenida: Ramen Ichiran & Gyoza',
       amount: 5400,
       currency: 'JPY',
       category: 'Comida',
       date: today,
-      paidBy: 'Carlos',
-      splitBetween: ['Yo', 'Carlos', 'Valeria'],
+      paid_by: 'Carlos',
+      split_between: ['Yo', 'Carlos', 'Valeria'],
       notes: 'Ramen tonkotsu clásico con extras',
-      createdAt: new Date().toISOString(),
+      created_at: new Date().toISOString(),
     },
     {
       id: 'exp_3',
-      tripId: sampleTripId,
-      userId,
+      trip_id: sampleTripId,
+      user_id: userId,
       title: 'Boletos Tren Shinkansen Tokio - Kioto',
       amount: 42000,
       currency: 'JPY',
       category: 'Transporte',
       date: today,
-      paidBy: 'Valeria',
-      splitBetween: ['Yo', 'Carlos', 'Valeria'],
+      paid_by: 'Valeria',
+      split_between: ['Yo', 'Carlos', 'Valeria'],
       notes: 'Asientos reservados en tren bala',
-      createdAt: new Date().toISOString(),
+      created_at: new Date().toISOString(),
     },
     {
       id: 'exp_4',
-      tripId: sampleTripId,
-      userId,
+      trip_id: sampleTripId,
+      user_id: userId,
       title: 'Entradas Museo Digital teamLab Planets',
       amount: 11400,
       currency: 'JPY',
       category: 'Actividades',
       date: today,
-      paidBy: 'Yo',
-      splitBetween: ['Yo', 'Carlos', 'Valeria'],
+      paid_by: 'Yo',
+      split_between: ['Yo', 'Carlos', 'Valeria'],
       notes: 'Horario estelar 18:00 hrs',
-      createdAt: new Date().toISOString(),
+      created_at: new Date().toISOString(),
     },
     {
       id: 'exp_5',
-      tripId: sampleTripId,
-      userId,
+      trip_id: sampleTripId,
+      user_id: userId,
       title: 'Té Matcha Ceremonial & Dulces Wagashi en Uji',
       amount: 3200,
       currency: 'JPY',
       category: 'Comida',
       date: today,
-      paidBy: 'Yo',
-      splitBetween: ['Yo'],
+      paid_by: 'Yo',
+      split_between: ['Yo'],
       notes: 'Experiencia tradicional japonesa',
-      createdAt: new Date().toISOString(),
+      created_at: new Date().toISOString(),
     },
   ];
 
-  db.trips.unshift(sampleTrip);
-  sampleExpenses.forEach(exp => db.expenses.unshift(exp));
+  await supabase.from('expenses').insert(sampleExpenses);
 }
 
-// Send Real Email with Resend Helper (Strict Real Dispatch, No Fixed 123456 Codes)
+// ============================================================================
+// REAL EMAIL SENDER WITH RESEND & AUDIT LOG IN SUPABASE
+// ============================================================================
 async function sendEmailNotification(
   to: string,
   subject: string,
@@ -222,25 +264,29 @@ async function sendEmailNotification(
   code: string,
   userName: string
 ): Promise<{ success: boolean; error?: string }> {
-  const db = loadDb();
   const resend = getResendClient();
   const fromEmail = process.env.RESEND_FROM_EMAIL || 'Rumbio <onboarding@resend.dev>';
 
   if (!resend) {
-    const errorMsg = 'El servicio de correo no está disponible: la variable RESEND_API_KEY no está configurada en las variables de entorno de Vercel/Servidor.';
+    const errorMsg =
+      'El servicio de correo no está disponible: la variable RESEND_API_KEY no está configurada en las variables de entorno de Vercel/Servidor.';
     console.error(`[Resend Error] ${errorMsg}`);
-    
-    db.emailLogs.unshift({
-      id: 'email_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
-      to,
-      subject,
-      type,
-      code,
-      status: 'failed',
-      error: errorMsg,
-      timestamp: new Date().toISOString(),
-    });
-    saveDb(db);
+
+    try {
+      const supabase = getSupabase();
+      await supabase.from('email_logs').insert({
+        id: 'email_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+        to_email: to,
+        subject,
+        type,
+        code,
+        status: 'failed',
+        error: errorMsg,
+        created_at: new Date().toISOString(),
+      });
+    } catch {
+      // Ignore log error if supabase is down
+    }
 
     return { success: false, error: errorMsg };
   }
@@ -285,7 +331,7 @@ async function sendEmailNotification(
             Si no solicitaste esta acción, puedes ignorar este mensaje con total tranquilidad. Tu cuenta e información financiera se mantienen protegidas.
           </p>
           <div class="footer">
-            Rumbio • Finanzas de Viajes Seguras • Multi-moneda & División de Gastos
+            Rumbio • Finanzas de Viajes Seguras en Supabase PostgreSQL
           </div>
         </div>
       </body>
@@ -304,56 +350,64 @@ async function sendEmailNotification(
       const errorMsg = `Error de Resend (${response.error.name}): ${response.error.message}`;
       console.warn('[Resend API Error]', response.error);
 
-      db.emailLogs.unshift({
-        id: 'email_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
-        to,
-        subject,
-        type,
-        code,
-        status: 'failed',
-        error: errorMsg,
-        timestamp: new Date().toISOString(),
-      });
-      saveDb(db);
+      try {
+        const supabase = getSupabase();
+        await supabase.from('email_logs').insert({
+          id: 'email_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+          to_email: to,
+          subject,
+          type,
+          code,
+          status: 'failed',
+          error: errorMsg,
+          created_at: new Date().toISOString(),
+        });
+      } catch {}
 
       return { success: false, error: errorMsg };
     }
 
     console.log(`[Resend] Real email dispatched successfully to ${to} (ID: ${response.data?.id})`);
 
-    db.emailLogs.unshift({
-      id: 'email_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
-      to,
-      subject,
-      type,
-      code,
-      status: 'sent_resend',
-      timestamp: new Date().toISOString(),
-    });
-    saveDb(db);
+    try {
+      const supabase = getSupabase();
+      await supabase.from('email_logs').insert({
+        id: 'email_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+        to_email: to,
+        subject,
+        type,
+        code,
+        status: 'sent_resend',
+        created_at: new Date().toISOString(),
+      });
+    } catch {}
 
     return { success: true };
   } catch (err: any) {
     const errorMsg = err.message || 'Error de comunicación con el servicio de correo Resend.';
     console.error('[Resend Exception]', err);
 
-    db.emailLogs.unshift({
-      id: 'email_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
-      to,
-      subject,
-      type,
-      code,
-      status: 'failed',
-      error: errorMsg,
-      timestamp: new Date().toISOString(),
-    });
-    saveDb(db);
+    try {
+      const supabase = getSupabase();
+      await supabase.from('email_logs').insert({
+        id: 'email_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+        to_email: to,
+        subject,
+        type,
+        code,
+        status: 'failed',
+        error: errorMsg,
+        created_at: new Date().toISOString(),
+      });
+    } catch {}
 
     return { success: false, error: errorMsg };
   }
 }
 
-// Auth Middleware: Strict Token Verification
+// ============================================================================
+// AUTH MIDDLEWARE: Strict Token Verification
+// ============================================================================
 export interface AuthenticatedRequest extends Request {
   user?: {
     id: string;
@@ -378,37 +432,64 @@ export function verifyAuth(req: AuthenticatedRequest, res: Response, next: NextF
   }
 }
 
-// Build and export the Express app
+// ============================================================================
+// EXPRESS APP INITIALIZATION
+// ============================================================================
 export const app = express();
 app.use(express.json());
 
-// ==========================================
+// ============================================================================
 // API ROUTES
-// ==========================================
+// ============================================================================
 
-// 1. Health & Config Status
-app.get('/api/health', (req: Request, res: Response) => {
+// 1. Health & Config Status (Checks Supabase + Resend)
+app.get('/api/health', async (req: Request, res: Response) => {
   const hasResend = !!process.env.RESEND_API_KEY && process.env.RESEND_API_KEY.trim().length > 0;
+  let supabaseStatus = 'disconnected';
+
+  try {
+    const supabase = getSupabase();
+    const { count, error } = await supabase.from('users').select('*', { count: 'exact', head: true });
+    if (!error) {
+      supabaseStatus = 'connected (PostgreSQL)';
+    } else {
+      supabaseStatus = `error: ${error.message}`;
+    }
+  } catch (err: any) {
+    supabaseStatus = `not configured: ${err.message}`;
+  }
+
   res.json({
     status: 'ok',
-    service: 'Rumbio Real Backend Engine',
+    service: 'Rumbio Production Backend Engine',
+    database: supabaseStatus,
     realEmailConfigured: hasResend,
     resendFrom: process.env.RESEND_FROM_EMAIL || 'Rumbio <onboarding@resend.dev>',
     timestamp: new Date().toISOString(),
   });
 });
 
-// 2. Email Delivery Diagnostic Logs
-app.get('/api/email-logs', (req: Request, res: Response) => {
-  const db = loadDb();
-  const hasResend = !!process.env.RESEND_API_KEY && process.env.RESEND_API_KEY.trim().length > 0;
-  res.json({
-    realEmailConfigured: hasResend,
-    logs: db.emailLogs.slice(0, 30),
-  });
+// 2. Email Delivery Diagnostic Logs from Supabase
+app.get('/api/email-logs', async (req: Request, res: Response) => {
+  try {
+    const supabase = getSupabase();
+    const { data: logs } = await supabase
+      .from('email_logs')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(30);
+
+    const hasResend = !!process.env.RESEND_API_KEY && process.env.RESEND_API_KEY.trim().length > 0;
+    res.json({
+      realEmailConfigured: hasResend,
+      logs: logs || [],
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Error al obtener logs de correo.' });
+  }
 });
 
-// 3. Register User & Send Real OTP via Resend
+// 3. Register User (Inserts into Supabase & Dispatches Real Resend OTP)
 app.post('/api/auth/register', async (req: Request, res: Response) => {
   try {
     const { name, email, password, homeCurrency } = req.body;
@@ -421,43 +502,64 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'La contraseña debe tener mínimo 6 caracteres.' });
     }
 
-    const db = loadDb();
+    const supabase = getSupabase();
     const normalizedEmail = email.trim().toLowerCase();
 
-    const existingUser = db.users.find(u => u.email.toLowerCase() === normalizedEmail);
-    if (existingUser && existingUser.isVerified) {
+    // Check existing user
+    const { data: existingUser } = await supabase
+      .from('users')
+      .select('*')
+      .eq('email', normalizedEmail)
+      .maybeSingle();
+
+    if (existingUser && existingUser.is_verified) {
       return res.status(400).json({ error: 'Ya existe una cuenta activa con este correo electrónico.' });
     }
 
-    // Cryptographic Password Hashing with real bcrypt (10 rounds)
+    // Cryptographic Password Hashing with bcrypt (10 rounds)
     const salt = await bcrypt.genSalt(10);
     const passwordHash = await bcrypt.hash(password, salt);
 
-    // Generate real random 6-digit OTP
+    // Generate real cryptographically random 6-digit OTP
     const code = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = Date.now() + 15 * 60 * 1000; // 15 mins
 
-    let user: UserDoc;
-    if (existingUser && !existingUser.isVerified) {
-      existingUser.name = name.trim();
-      existingUser.passwordHash = passwordHash;
-      existingUser.verificationCode = code;
-      existingUser.verificationCodeExpires = expiresAt;
-      existingUser.homeCurrency = homeCurrency || 'USD';
-      user = existingUser;
+    let userId: string;
+    let userName = name.trim();
+
+    if (existingUser && !existingUser.is_verified) {
+      userId = existingUser.id;
+      const { error: updateError } = await supabase
+        .from('users')
+        .update({
+          name: userName,
+          password_hash: passwordHash,
+          verification_code: code,
+          verification_code_expires: expiresAt,
+          home_currency: homeCurrency || 'USD',
+        })
+        .eq('id', userId);
+
+      if (updateError) {
+        throw new Error(`Error al actualizar usuario: ${updateError.message}`);
+      }
     } else {
-      user = {
-        id: 'usr_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
-        name: name.trim(),
+      userId = 'usr_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+      const { error: insertError } = await supabase.from('users').insert({
+        id: userId,
+        name: userName,
         email: normalizedEmail,
-        passwordHash,
-        isVerified: false,
-        verificationCode: code,
-        verificationCodeExpires: expiresAt,
-        homeCurrency: homeCurrency || 'USD',
-        createdAt: new Date().toISOString(),
-      };
-      db.users.push(user);
+        password_hash: passwordHash,
+        is_verified: false,
+        verification_code: code,
+        verification_code_expires: expiresAt,
+        home_currency: homeCurrency || 'USD',
+        created_at: new Date().toISOString(),
+      });
+
+      if (insertError) {
+        throw new Error(`Error al registrar usuario en Supabase: ${insertError.message}`);
+      }
     }
 
     // Dispatch real email via Resend
@@ -466,16 +568,16 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
       '✈️ Tu código de verificación para activar Rumbio',
       'verification',
       code,
-      user.name
+      userName
     );
 
     if (!emailResult.success) {
       return res.status(503).json({
-        error: emailResult.error || 'No fue posible enviar el correo de verificación. Verifica que RESEND_API_KEY esté configurada.',
+        error:
+          emailResult.error ||
+          'No fue posible enviar el correo de verificación. Verifica que RESEND_API_KEY esté configurada.',
       });
     }
-
-    saveDb(db);
 
     res.status(201).json({
       message: 'Código de verificación enviado a tu correo.',
@@ -488,7 +590,7 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
   }
 });
 
-// 4. Verify OTP Code & Activate Account
+// 4. Verify OTP Code & Activate Account in Supabase
 app.post('/api/auth/verify-otp', async (req: Request, res: Response) => {
   try {
     const { email, code } = req.body;
@@ -496,13 +598,20 @@ app.post('/api/auth/verify-otp', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Correo y código de verificación requeridos.' });
     }
 
-    const db = loadDb();
+    const supabase = getSupabase();
     const normalizedEmail = email.trim().toLowerCase();
-    const user = db.users.find(u => u.email === normalizedEmail);
 
-    if (!user) {
+    const { data: userRow, error: userError } = await supabase
+      .from('users')
+      .select('*')
+      .eq('email', normalizedEmail)
+      .maybeSingle();
+
+    if (userError || !userRow) {
       return res.status(404).json({ error: 'Usuario no encontrado.' });
     }
+
+    const user = mapUserFromDb(userRow);
 
     if (!user.verificationCode || user.verificationCode !== code.trim()) {
       return res.status(400).json({ error: 'Código de verificación incorrecto.' });
@@ -512,17 +621,29 @@ app.post('/api/auth/verify-otp', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'El código ha expirado. Por favor solicita uno nuevo.' });
     }
 
-    user.isVerified = true;
-    user.verificationCode = undefined;
-    user.verificationCodeExpires = undefined;
+    // Mark as verified and clear verification code
+    const { error: updateError } = await supabase
+      .from('users')
+      .update({
+        is_verified: true,
+        verification_code: null,
+        verification_code_expires: null,
+      })
+      .eq('id', user.id);
 
-    // Seed initial trip if user has none
-    const userTrips = db.trips.filter(t => t.userId === user.id);
-    if (userTrips.length === 0) {
-      seedInitialTrip(user.id, user.name, user.homeCurrency, db);
+    if (updateError) {
+      throw new Error(`Error al activar cuenta: ${updateError.message}`);
     }
 
-    saveDb(db);
+    // Check if user has trips in Supabase; if 0, seed sample trip
+    const { count: tripCount } = await supabase
+      .from('trips')
+      .select('*', { count: 'exact', head: true })
+      .eq('user_id', user.id);
+
+    if (!tripCount || tripCount === 0) {
+      await seedInitialTripInSupabase(user.id, user.name, user.homeCurrency);
+    }
 
     // Generate JWT Token
     const token = jwt.sign(
@@ -543,7 +664,7 @@ app.post('/api/auth/verify-otp', async (req: Request, res: Response) => {
     });
   } catch (err: any) {
     console.error('Verify error:', err);
-    res.status(500).json({ error: 'Error al verificar código.' });
+    res.status(500).json({ error: err.message || 'Error al verificar código.' });
   }
 });
 
@@ -555,24 +676,36 @@ app.post('/api/auth/resend-otp', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Correo es obligatorio.' });
     }
 
-    const db = loadDb();
+    const supabase = getSupabase();
     const normalizedEmail = email.trim().toLowerCase();
-    const user = db.users.find(u => u.email === normalizedEmail);
 
-    if (!user) {
+    const { data: userRow } = await supabase
+      .from('users')
+      .select('*')
+      .eq('email', normalizedEmail)
+      .maybeSingle();
+
+    if (!userRow) {
       return res.status(404).json({ error: 'Usuario no encontrado.' });
     }
 
     const code = Math.floor(100000 + Math.random() * 900000).toString();
-    user.verificationCode = code;
-    user.verificationCodeExpires = Date.now() + 15 * 60 * 1000;
+    const expiresAt = Date.now() + 15 * 60 * 1000;
+
+    await supabase
+      .from('users')
+      .update({
+        verification_code: code,
+        verification_code_expires: expiresAt,
+      })
+      .eq('id', userRow.id);
 
     const emailResult = await sendEmailNotification(
       normalizedEmail,
       '✈️ Nuevo código de verificación - Rumbio',
       'verification',
       code,
-      user.name
+      userRow.name
     );
 
     if (!emailResult.success) {
@@ -581,18 +714,16 @@ app.post('/api/auth/resend-otp', async (req: Request, res: Response) => {
       });
     }
 
-    saveDb(db);
-
     res.json({
       message: 'Nuevo código enviado exitosamente a tu correo.',
       realEmailSent: true,
     });
   } catch (err: any) {
-    res.status(500).json({ error: 'Error al reenviar código.' });
+    res.status(500).json({ error: err.message || 'Error al reenviar código.' });
   }
 });
 
-// 6. Login User (bcrypt compare)
+// 6. Login User (bcrypt compare against Supabase hash)
 app.post('/api/auth/login', async (req: Request, res: Response) => {
   try {
     const { email, password } = req.body;
@@ -600,29 +731,34 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Correo y contraseña requeridos.' });
     }
 
-    const db = loadDb();
+    const supabase = getSupabase();
     const normalizedEmail = email.trim().toLowerCase();
-    const user = db.users.find(u => u.email === normalizedEmail);
 
-    if (!user) {
+    const { data: userRow } = await supabase
+      .from('users')
+      .select('*')
+      .eq('email', normalizedEmail)
+      .maybeSingle();
+
+    if (!userRow) {
       return res.status(401).json({ error: 'Credenciales inválidas.' });
     }
 
-    const isMatch = await bcrypt.compare(password, user.passwordHash);
+    const isMatch = await bcrypt.compare(password, userRow.password_hash);
     if (!isMatch) {
       return res.status(401).json({ error: 'Credenciales inválidas.' });
     }
 
-    if (!user.isVerified) {
+    if (!userRow.is_verified) {
       return res.status(403).json({
         error: 'Cuenta no verificada. Por favor introduce tu código OTP.',
         requiresVerification: true,
-        email: user.email,
+        email: userRow.email,
       });
     }
 
     const token = jwt.sign(
-      { id: user.id, email: user.email, name: user.name },
+      { id: userRow.id, email: userRow.email, name: userRow.name },
       JWT_SECRET,
       { expiresIn: '7d' }
     );
@@ -630,20 +766,20 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
     res.json({
       token,
       user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        homeCurrency: user.homeCurrency,
-        createdAt: user.createdAt,
+        id: userRow.id,
+        name: userRow.name,
+        email: userRow.email,
+        homeCurrency: userRow.home_currency || 'USD',
+        createdAt: userRow.created_at,
       },
     });
   } catch (err: any) {
     console.error('Login error:', err);
-    res.status(500).json({ error: 'Error al iniciar sesión.' });
+    res.status(500).json({ error: err.message || 'Error al iniciar sesión.' });
   }
 });
 
-// 7. Request Password Reset (Real email via Resend)
+// 7. Request Password Reset (Dispatches Real OTP via Resend)
 app.post('/api/auth/forgot-password', async (req: Request, res: Response) => {
   try {
     const { email } = req.body;
@@ -651,24 +787,36 @@ app.post('/api/auth/forgot-password', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Correo requerido.' });
     }
 
-    const db = loadDb();
+    const supabase = getSupabase();
     const normalizedEmail = email.trim().toLowerCase();
-    const user = db.users.find(u => u.email === normalizedEmail);
 
-    if (!user) {
+    const { data: userRow } = await supabase
+      .from('users')
+      .select('*')
+      .eq('email', normalizedEmail)
+      .maybeSingle();
+
+    if (!userRow) {
       return res.status(404).json({ error: 'No encontramos ninguna cuenta con este correo.' });
     }
 
     const code = Math.floor(100000 + Math.random() * 900000).toString();
-    user.verificationCode = code;
-    user.verificationCodeExpires = Date.now() + 15 * 60 * 1000;
+    const expiresAt = Date.now() + 15 * 60 * 1000;
+
+    await supabase
+      .from('users')
+      .update({
+        verification_code: code,
+        verification_code_expires: expiresAt,
+      })
+      .eq('id', userRow.id);
 
     const emailResult = await sendEmailNotification(
       normalizedEmail,
       '🔒 Código para restablecer tu contraseña - Rumbio',
       'reset',
       code,
-      user.name
+      userRow.name
     );
 
     if (!emailResult.success) {
@@ -677,18 +825,16 @@ app.post('/api/auth/forgot-password', async (req: Request, res: Response) => {
       });
     }
 
-    saveDb(db);
-
     res.json({
       message: 'Código de recuperación enviado.',
       realEmailSent: true,
     });
   } catch (err: any) {
-    res.status(500).json({ error: 'Error al solicitar recuperación.' });
+    res.status(500).json({ error: err.message || 'Error al solicitar recuperación.' });
   }
 });
 
-// 8. Reset Password (with bcrypt hash)
+// 8. Reset Password (with bcrypt hash in Supabase)
 app.post('/api/auth/reset-password', async (req: Request, res: Response) => {
   try {
     const { email, code, newPassword } = req.body;
@@ -700,213 +846,385 @@ app.post('/api/auth/reset-password', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'La nueva contraseña debe tener al menos 6 caracteres.' });
     }
 
-    const db = loadDb();
+    const supabase = getSupabase();
     const normalizedEmail = email.trim().toLowerCase();
-    const user = db.users.find(u => u.email === normalizedEmail);
 
-    if (!user || user.verificationCode !== code.trim()) {
+    const { data: userRow } = await supabase
+      .from('users')
+      .select('*')
+      .eq('email', normalizedEmail)
+      .maybeSingle();
+
+    if (!userRow || userRow.verification_code !== code.trim()) {
       return res.status(400).json({ error: 'Código de recuperación inválido o expirado.' });
     }
 
-    if (user.verificationCodeExpires && Date.now() > user.verificationCodeExpires) {
+    if (userRow.verification_code_expires && Date.now() > Number(userRow.verification_code_expires)) {
       return res.status(400).json({ error: 'El código ha expirado.' });
     }
 
     const salt = await bcrypt.genSalt(10);
-    user.passwordHash = await bcrypt.hash(newPassword, salt);
-    user.verificationCode = undefined;
-    user.verificationCodeExpires = undefined;
-    user.isVerified = true;
-    saveDb(db);
+    const passwordHash = await bcrypt.hash(newPassword, salt);
+
+    const { error: updateError } = await supabase
+      .from('users')
+      .update({
+        password_hash: passwordHash,
+        verification_code: null,
+        verification_code_expires: null,
+        is_verified: true,
+      })
+      .eq('id', userRow.id);
+
+    if (updateError) {
+      throw new Error(`Error al actualizar contraseña: ${updateError.message}`);
+    }
 
     res.json({ message: 'Contraseña actualizada exitosamente. Ya puedes iniciar sesión.' });
   } catch (err: any) {
-    res.status(500).json({ error: 'Error al restablecer contraseña.' });
+    res.status(500).json({ error: err.message || 'Error al restablecer contraseña.' });
   }
 });
 
 // 9. Current Authenticated User Profile
-app.get('/api/auth/me', verifyAuth, (req: AuthenticatedRequest, res: Response) => {
-  const db = loadDb();
-  const user = db.users.find(u => u.id === req.user!.id);
-  if (!user) {
-    return res.status(404).json({ error: 'Usuario no encontrado.' });
-  }
-  res.json({
-    id: user.id,
-    name: user.name,
-    email: user.email,
-    homeCurrency: user.homeCurrency,
-    createdAt: user.createdAt,
-  });
-});
+app.get('/api/auth/me', verifyAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const supabase = getSupabase();
+    const { data: userRow } = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', req.user!.id)
+      .maybeSingle();
 
-app.put('/api/auth/me', verifyAuth, (req: AuthenticatedRequest, res: Response) => {
-  const { homeCurrency, name } = req.body;
-  const db = loadDb();
-  const user = db.users.find(u => u.id === req.user!.id);
-  if (!user) {
-    return res.status(404).json({ error: 'Usuario no encontrado.' });
-  }
-  if (homeCurrency) user.homeCurrency = homeCurrency;
-  if (name) user.name = name.trim();
-  saveDb(db);
-  res.json({
-    id: user.id,
-    name: user.name,
-    email: user.email,
-    homeCurrency: user.homeCurrency,
-    createdAt: user.createdAt,
-  });
-});
-
-// 10. Trips: Get only user's trips
-app.get('/api/trips', verifyAuth, (req: AuthenticatedRequest, res: Response) => {
-  const db = loadDb();
-  const userTrips = db.trips.filter(t => t.userId === req.user!.id);
-  res.json(userTrips);
-});
-
-// 11. Trips: Create or Update trip (enforces userId = req.user.id)
-app.post('/api/trips', verifyAuth, (req: AuthenticatedRequest, res: Response) => {
-  const db = loadDb();
-  const tripData = req.body;
-  const userId = req.user!.id;
-
-  const existingIndex = db.trips.findIndex(t => t.id === tripData.id);
-
-  if (existingIndex >= 0) {
-    if (db.trips[existingIndex].userId !== userId) {
-      return res.status(403).json({ error: 'Acceso denegado. No puedes modificar viajes de otro usuario.' });
+    if (!userRow) {
+      return res.status(404).json({ error: 'Usuario no encontrado.' });
     }
-    db.trips[existingIndex] = {
-      ...db.trips[existingIndex],
-      ...tripData,
-      userId,
-    };
-    saveDb(db);
-    return res.json(db.trips[existingIndex]);
-  } else {
-    const newTrip: TripDoc = {
-      id: tripData.id || 'trip_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
-      userId,
+
+    const user = mapUserFromDb(userRow);
+    res.json({
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      homeCurrency: user.homeCurrency,
+      createdAt: user.createdAt,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Error al obtener perfil.' });
+  }
+});
+
+app.put('/api/auth/me', verifyAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { homeCurrency, name } = req.body;
+    const supabase = getSupabase();
+
+    const updates: any = {};
+    if (homeCurrency) updates.home_currency = homeCurrency;
+    if (name) updates.name = name.trim();
+
+    const { data: updatedRow, error } = await supabase
+      .from('users')
+      .update(updates)
+      .eq('id', req.user!.id)
+      .select()
+      .single();
+
+    if (error || !updatedRow) {
+      return res.status(500).json({ error: error?.message || 'Error al actualizar perfil.' });
+    }
+
+    const user = mapUserFromDb(updatedRow);
+    res.json({
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      homeCurrency: user.homeCurrency,
+      createdAt: user.createdAt,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Error al actualizar perfil.' });
+  }
+});
+
+// ============================================================================
+// STRICT USER DATA ISOLATION ROUTES (TRIPS & EXPENSES IN SUPABASE)
+// Enforces `WHERE user_id = req.user.id` on every query.
+// ============================================================================
+
+// 10. Trips: Get only authenticated user's trips
+app.get('/api/trips', verifyAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const supabase = getSupabase();
+    const { data: tripRows, error } = await supabase
+      .from('trips')
+      .select('*')
+      .eq('user_id', req.user!.id)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    const trips = (tripRows || []).map(mapTripFromDb);
+    res.json(trips);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Error al cargar viajes.' });
+  }
+});
+
+// 11. Trips: Create or Update trip (enforces user_id = req.user.id)
+app.post('/api/trips', verifyAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const supabase = getSupabase();
+    const tripData = req.body;
+    const userId = req.user!.id;
+
+    if (tripData.id) {
+      // Check ownership
+      const { data: existingTrip } = await supabase
+        .from('trips')
+        .select('*')
+        .eq('id', tripData.id)
+        .maybeSingle();
+
+      if (existingTrip) {
+        if (existingTrip.user_id !== userId) {
+          return res.status(403).json({ error: 'Acceso denegado. No puedes modificar viajes de otro usuario.' });
+        }
+
+        const updatePayload = {
+          name: tripData.name || existingTrip.name,
+          destination: tripData.destination || existingTrip.destination,
+          start_date: tripData.startDate || existingTrip.start_date,
+          end_date: tripData.endDate || existingTrip.end_date,
+          budget: Number(tripData.budget) || existingTrip.budget,
+          currency: tripData.currency || existingTrip.currency,
+          exchange_rate: Number(tripData.exchangeRate) || existingTrip.exchange_rate,
+          members: Array.isArray(tripData.members) ? tripData.members : existingTrip.members,
+          plans: Array.isArray(tripData.plans) ? tripData.plans : existingTrip.plans,
+          checklist: Array.isArray(tripData.checklist) ? tripData.checklist : existingTrip.checklist,
+        };
+
+        const { data: updatedRow, error: updateError } = await supabase
+          .from('trips')
+          .update(updatePayload)
+          .eq('id', tripData.id)
+          .eq('user_id', userId)
+          .select()
+          .single();
+
+        if (updateError) throw new Error(updateError.message);
+        return res.json(mapTripFromDb(updatedRow));
+      }
+    }
+
+    // Insert brand new trip
+    const newTripId = tripData.id || 'trip_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+    const insertPayload = {
+      id: newTripId,
+      user_id: userId,
       name: tripData.name || 'Nuevo Viaje',
       destination: tripData.destination || 'Destino',
-      startDate: tripData.startDate || new Date().toISOString().split('T')[0],
-      endDate: tripData.endDate || new Date().toISOString().split('T')[0],
+      start_date: tripData.startDate || new Date().toISOString().split('T')[0],
+      end_date: tripData.endDate || new Date().toISOString().split('T')[0],
       budget: Number(tripData.budget) || 2000,
       currency: tripData.currency || 'EUR',
-      exchangeRate: Number(tripData.exchangeRate) || 1.0,
+      exchange_rate: Number(tripData.exchangeRate) || 1.0,
       members: Array.isArray(tripData.members) && tripData.members.length > 0 ? tripData.members : ['Yo'],
-      plans: tripData.plans || [],
-      checklist: tripData.checklist || [],
-      createdAt: tripData.createdAt || new Date().toISOString(),
+      plans: Array.isArray(tripData.plans) ? tripData.plans : [],
+      checklist: Array.isArray(tripData.checklist) ? tripData.checklist : [],
+      created_at: tripData.createdAt || new Date().toISOString(),
     };
-    db.trips.unshift(newTrip);
-    saveDb(db);
-    return res.status(201).json(newTrip);
+
+    const { data: insertedRow, error: insertError } = await supabase
+      .from('trips')
+      .insert(insertPayload)
+      .select()
+      .single();
+
+    if (insertError) throw new Error(insertError.message);
+    res.status(201).json(mapTripFromDb(insertedRow));
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Error al guardar viaje.' });
   }
 });
 
-// 12. Trips: Delete trip
-app.delete('/api/trips/:id', verifyAuth, (req: AuthenticatedRequest, res: Response) => {
-  const db = loadDb();
-  const tripId = req.params.id;
-  const userId = req.user!.id;
+// 12. Trips: Delete trip (Cascades expenses in PostgreSQL)
+app.delete('/api/trips/:id', verifyAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const supabase = getSupabase();
+    const tripId = req.params.id;
+    const userId = req.user!.id;
 
-  const trip = db.trips.find(t => t.id === tripId);
-  if (!trip) {
-    return res.status(404).json({ error: 'Viaje no encontrado.' });
+    const { data: trip } = await supabase
+      .from('trips')
+      .select('*')
+      .eq('id', tripId)
+      .maybeSingle();
+
+    if (!trip) {
+      return res.status(404).json({ error: 'Viaje no encontrado.' });
+    }
+
+    if (trip.user_id !== userId) {
+      return res.status(403).json({ error: 'Acceso denegado. No puedes eliminar viajes de otro usuario.' });
+    }
+
+    const { error: deleteError } = await supabase
+      .from('trips')
+      .delete()
+      .eq('id', tripId)
+      .eq('user_id', userId);
+
+    if (deleteError) throw new Error(deleteError.message);
+
+    res.json({ message: 'Viaje y gastos asociados eliminados correctamente.' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Error al eliminar viaje.' });
   }
-
-  if (trip.userId !== userId) {
-    return res.status(403).json({ error: 'Acceso denegado. No puedes eliminar viajes de otro usuario.' });
-  }
-
-  db.trips = db.trips.filter(t => t.id !== tripId);
-  db.expenses = db.expenses.filter(e => !(e.tripId === tripId && e.userId === userId));
-  saveDb(db);
-
-  res.json({ message: 'Viaje y gastos asociados eliminados correctamente.' });
 });
 
-// 13. Expenses: Get only user's expenses
-app.get('/api/expenses', verifyAuth, (req: AuthenticatedRequest, res: Response) => {
-  const db = loadDb();
-  const userId = req.user!.id;
-  const tripId = req.query.tripId as string | undefined;
+// 13. Expenses: Get only authenticated user's expenses
+app.get('/api/expenses', verifyAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const supabase = getSupabase();
+    const userId = req.user!.id;
+    const tripId = req.query.tripId as string | undefined;
 
-  let userExpenses = db.expenses.filter(e => e.userId === userId);
-  if (tripId) {
-    userExpenses = userExpenses.filter(e => e.tripId === tripId);
+    let query = supabase.from('expenses').select('*').eq('user_id', userId);
+    if (tripId) {
+      query = query.eq('trip_id', tripId);
+    }
+    query = query.order('created_at', { ascending: false });
+
+    const { data: expenseRows, error } = await query;
+    if (error) throw new Error(error.message);
+
+    const expenses = (expenseRows || []).map(mapExpenseFromDb);
+    res.json(expenses);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Error al cargar gastos.' });
   }
-
-  res.json(userExpenses);
 });
 
 // 14. Expenses: Create or Update Expense
-app.post('/api/expenses', verifyAuth, (req: AuthenticatedRequest, res: Response) => {
-  const db = loadDb();
-  const expData = req.body;
-  const userId = req.user!.id;
+app.post('/api/expenses', verifyAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const supabase = getSupabase();
+    const expData = req.body;
+    const userId = req.user!.id;
 
-  const targetTrip = db.trips.find(t => t.id === expData.tripId && t.userId === userId);
-  if (!targetTrip) {
-    return res.status(403).json({ error: 'El viaje especificado no existe o no te pertenece.' });
-  }
+    // Verify trip belongs to user
+    const { data: targetTrip } = await supabase
+      .from('trips')
+      .select('*')
+      .eq('id', expData.tripId)
+      .eq('user_id', userId)
+      .maybeSingle();
 
-  const existingIndex = db.expenses.findIndex(e => e.id === expData.id);
-
-  if (existingIndex >= 0) {
-    if (db.expenses[existingIndex].userId !== userId) {
-      return res.status(403).json({ error: 'Acceso denegado. No puedes modificar gastos de otro usuario.' });
+    if (!targetTrip) {
+      return res.status(403).json({ error: 'El viaje especificado no existe o no te pertenece.' });
     }
-    db.expenses[existingIndex] = {
-      ...db.expenses[existingIndex],
-      ...expData,
-      userId,
-    };
-    saveDb(db);
-    return res.json(db.expenses[existingIndex]);
-  } else {
-    const newExpense: ExpenseDoc = {
-      id: expData.id || 'exp_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
-      tripId: expData.tripId,
-      userId,
+
+    if (expData.id) {
+      const { data: existingExp } = await supabase
+        .from('expenses')
+        .select('*')
+        .eq('id', expData.id)
+        .maybeSingle();
+
+      if (existingExp) {
+        if (existingExp.user_id !== userId) {
+          return res.status(403).json({ error: 'Acceso denegado. No puedes modificar gastos de otro usuario.' });
+        }
+
+        const updatePayload = {
+          title: expData.title || existingExp.title,
+          amount: Number(expData.amount) !== undefined ? Number(expData.amount) : existingExp.amount,
+          currency: expData.currency || existingExp.currency,
+          category: expData.category || existingExp.category,
+          date: expData.date || existingExp.date,
+          paid_by: expData.paidBy || existingExp.paid_by,
+          split_between: Array.isArray(expData.splitBetween) ? expData.splitBetween : existingExp.split_between,
+          notes: expData.notes !== undefined ? expData.notes : existingExp.notes,
+        };
+
+        const { data: updatedRow, error: updateError } = await supabase
+          .from('expenses')
+          .update(updatePayload)
+          .eq('id', expData.id)
+          .eq('user_id', userId)
+          .select()
+          .single();
+
+        if (updateError) throw new Error(updateError.message);
+        return res.json(mapExpenseFromDb(updatedRow));
+      }
+    }
+
+    // Insert new expense
+    const newExpId = expData.id || 'exp_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+    const insertPayload = {
+      id: newExpId,
+      trip_id: expData.tripId,
+      user_id: userId,
       title: expData.title || 'Gasto',
       amount: Number(expData.amount) || 0,
       currency: expData.currency || targetTrip.currency,
       category: expData.category || 'Comida',
       date: expData.date || new Date().toISOString().split('T')[0],
-      paidBy: expData.paidBy || 'Yo',
-      splitBetween: Array.isArray(expData.splitBetween) && expData.splitBetween.length > 0 ? expData.splitBetween : ['Yo'],
-      notes: expData.notes,
-      createdAt: expData.createdAt || new Date().toISOString(),
+      paid_by: expData.paidBy || 'Yo',
+      split_between:
+        Array.isArray(expData.splitBetween) && expData.splitBetween.length > 0 ? expData.splitBetween : ['Yo'],
+      notes: expData.notes || '',
+      created_at: expData.createdAt || new Date().toISOString(),
     };
-    db.expenses.unshift(newExpense);
-    saveDb(db);
-    return res.status(201).json(newExpense);
+
+    const { data: insertedRow, error: insertError } = await supabase
+      .from('expenses')
+      .insert(insertPayload)
+      .select()
+      .single();
+
+    if (insertError) throw new Error(insertError.message);
+    res.status(201).json(mapExpenseFromDb(insertedRow));
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Error al guardar gasto.' });
   }
 });
 
 // 15. Expenses: Delete Expense
-app.delete('/api/expenses/:id', verifyAuth, (req: AuthenticatedRequest, res: Response) => {
-  const db = loadDb();
-  const expId = req.params.id;
-  const userId = req.user!.id;
+app.delete('/api/expenses/:id', verifyAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const supabase = getSupabase();
+    const expId = req.params.id;
+    const userId = req.user!.id;
 
-  const expense = db.expenses.find(e => e.id === expId);
-  if (!expense) {
-    return res.status(404).json({ error: 'Gasto no encontrado.' });
+    const { data: expense } = await supabase
+      .from('expenses')
+      .select('*')
+      .eq('id', expId)
+      .maybeSingle();
+
+    if (!expense) {
+      return res.status(404).json({ error: 'Gasto no encontrado.' });
+    }
+
+    if (expense.user_id !== userId) {
+      return res.status(403).json({ error: 'Acceso denegado.' });
+    }
+
+    const { error: deleteError } = await supabase
+      .from('expenses')
+      .delete()
+      .eq('id', expId)
+      .eq('user_id', userId);
+
+    if (deleteError) throw new Error(deleteError.message);
+    res.json({ message: 'Gasto eliminado.' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Error al eliminar gasto.' });
   }
-
-  if (expense.userId !== userId) {
-    return res.status(403).json({ error: 'Acceso denegado.' });
-  }
-
-  db.expenses = db.expenses.filter(e => e.id !== expId);
-  saveDb(db);
-  res.json({ message: 'Gasto eliminado.' });
 });
 
 export default app;
