@@ -24,7 +24,6 @@ import { TabsNav } from './components/TabsNav';
 import { TripModal } from './components/TripModal';
 import { ExpenseModal } from './components/ExpenseModal';
 import { OnboardingModal } from './components/OnboardingModal';
-import { SimulatedInbox } from './components/SimulatedInbox';
 import { ToastContainer } from './components/ToastContainer';
 import { LogoBrandModal } from './components/LogoBrandModal';
 import { LogoConcept } from './components/RumbioLogo';
@@ -51,9 +50,8 @@ export function App() {
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
   const [isOnboardingOpen, setIsOnboardingOpen] = useState(false);
 
-  // Notifications & OTP Autofill
+  // Notifications
   const [toasts, setToasts] = useState<ToastNotification[]>([]);
-  const [autofilledCode, setAutofilledCode] = useState<string | undefined>(undefined);
 
   const showToast = useCallback(
     (message: string, type: 'success' | 'error' | 'warning' | 'info' = 'info') => {
@@ -328,18 +326,11 @@ export function App() {
       {/* Toast Notifications Overlay */}
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
 
-      {/* Real Email & OTP Delivery Monitor Widget */}
-      <SimulatedInbox 
-        userEmail={currentUser?.email} 
-        onApplyCode={(code) => setAutofilledCode(code)} 
-      />
-
       {/* Not Logged In -> Auth View */}
       {!currentUser ? (
         <AuthView
           onLoginSuccess={handleLoginSuccess}
           onShowToast={showToast}
-          autofilledCode={autofilledCode}
         />
       ) : (
         /* Logged In -> Main Application View */

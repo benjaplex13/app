@@ -23,8 +23,6 @@ import { RumbioLogo } from '../components/RumbioLogo';
 interface AuthViewProps {
   onLoginSuccess: (user: User) => void;
   onShowToast: (message: string, type: 'success' | 'error' | 'warning' | 'info') => void;
-  autofilledCode?: string;
-  onCodeGenerated?: (code: string, toEmail: string) => void;
 }
 
 type AuthMode = 'login' | 'register' | 'verify' | 'forgot' | 'reset-password';
@@ -32,8 +30,6 @@ type AuthMode = 'login' | 'register' | 'verify' | 'forgot' | 'reset-password';
 export const AuthView: React.FC<AuthViewProps> = ({
   onLoginSuccess,
   onShowToast,
-  autofilledCode,
-  onCodeGenerated,
 }) => {
   const [mode, setMode] = useState<AuthMode>('login');
   const [name, setName] = useState('');
@@ -42,15 +38,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
   const [verifyCode, setVerifyCode] = useState('');
   const [homeCurrency, setHomeCurrency] = useState<CurrencyCode>('USD');
   const [isLoading, setIsLoading] = useState(false);
-  const [lastEmailStatus, setLastEmailStatus] = useState<{ realSent: boolean; message?: string } | null>(null);
   const [logoClicks, setLogoClicks] = useState(0);
-
-  // If parent provides an autofilled code
-  React.useEffect(() => {
-    if (autofilledCode) {
-      setVerifyCode(autofilledCode);
-    }
-  }, [autofilledCode]);
 
   const handleLogoEasterEgg = () => {
     const next = logoClicks + 1;
@@ -104,19 +92,8 @@ export const AuthView: React.FC<AuthViewProps> = ({
 
     setIsLoading(true);
     try {
-      const result = await api.register(name.trim(), email.trim(), password, homeCurrency);
-      
-      if (result.realEmailSent) {
-        setLastEmailStatus({ realSent: true });
-        onShowToast('✉️ ¡Código OTP enviado a tu correo real! Revisa tu bandeja de entrada o spam.', 'success');
-      } else {
-        setLastEmailStatus({ realSent: false, message: 'Configura RESEND_API_KEY en variables de entorno para entrega directa.' });
-        onShowToast('Código de 6 dígitos generado en el servidor.', 'info');
-        if (result.devCode && onCodeGenerated) {
-          onCodeGenerated(result.devCode, email.trim());
-        }
-      }
-
+      await api.register(name.trim(), email.trim(), password, homeCurrency);
+      onShowToast('✉️ ¡Código OTP enviado a tu correo! Revisa tu bandeja de entrada o spam.', 'success');
       setMode('verify');
     } catch (err: any) {
       onShowToast(err.message || 'Error al registrar la cuenta.', 'error');
@@ -128,7 +105,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
   const handleVerifySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!verifyCode.trim()) {
-      onShowToast('Ingresa el código de 6 dígitos.', 'warning');
+      onShowToast('Ingresa el código de 6 dígitos recibido por correo.', 'warning');
       return;
     }
 
@@ -152,15 +129,8 @@ export const AuthView: React.FC<AuthViewProps> = ({
 
     setIsLoading(true);
     try {
-      const result = await api.resendOtp(email.trim());
-      if (result.realEmailSent) {
-        onShowToast('✉️ Nuevo código enviado a tu correo real.', 'success');
-      } else {
-        onShowToast('Nuevo código OTP regenerado.', 'info');
-        if (result.devCode && onCodeGenerated) {
-          onCodeGenerated(result.devCode, email.trim());
-        }
-      }
+      await api.resendOtp(email.trim());
+      onShowToast('✉️ Nuevo código OTP enviado a tu correo.', 'success');
     } catch (err: any) {
       onShowToast(err.message || 'Error al reenviar código.', 'error');
     } finally {
@@ -177,15 +147,8 @@ export const AuthView: React.FC<AuthViewProps> = ({
 
     setIsLoading(true);
     try {
-      const result = await api.forgotPassword(email.trim());
-      if (result.realEmailSent) {
-        onShowToast('🔒 Código de recuperación enviado a tu correo real.', 'success');
-      } else {
-        onShowToast('Código de recuperación temporal generado.', 'info');
-        if (result.devCode && onCodeGenerated) {
-          onCodeGenerated(result.devCode, email.trim());
-        }
-      }
+      await api.forgotPassword(email.trim());
+      onShowToast('🔒 Código de recuperación enviado a tu correo.', 'success');
       setMode('reset-password');
     } catch (err: any) {
       onShowToast(err.message || 'Error al solicitar recuperación.', 'error');
@@ -433,13 +396,8 @@ export const AuthView: React.FC<AuthViewProps> = ({
               <div>
                 <span className="font-bold block text-white">Código de Verificación OTP</span>
                 <span>
-                  Enviado para el correo <b>{email}</b>. Ingresa los 6 dígitos para autenticar tu cuenta.
+                  Revisa tu bandeja de entrada o spam en <b>{email}</b> e introduce el código de 6 dígitos enviado por correo.
                 </span>
-                {lastEmailStatus && lastEmailStatus.realSent && (
-                  <div className="mt-1.5 flex items-center gap-1 text-[11px] text-emerald-400 font-medium">
-                    <CheckCircle2 className="w-3.5 h-3.5" /> Correo real enviado vía Resend.
-                  </div>
-                )}
               </div>
             </div>
 
@@ -453,7 +411,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
                 maxLength={6}
                 value={verifyCode}
                 onChange={(e) => setVerifyCode(e.target.value)}
-                placeholder="123456"
+                placeholder="• • • • • •"
                 className="w-full text-center text-3xl tracking-widest font-mono font-extrabold bg-slate-900 border border-white/10 rounded-2xl py-3.5 text-cyan-400 focus:border-blue-500 focus:outline-none"
               />
             </div>
