@@ -1,4 +1,4 @@
-import app from './server-app';
+import app from './api/index';
 import path from 'path';
 import express, { Request, Response } from 'express';
 import { createServer as createViteServer } from 'vite';
