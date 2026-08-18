@@ -131,14 +131,55 @@ export function getSupabase(): SupabaseClient {
 }
 
 // ============================================================================
-// RESEND CLIENT (Lazy Initialization)
+// RESEND CLIENT & DIAGNOSTICS (Lazy Initialization & Safe Inspection)
 // ============================================================================
+export function getResendKeyDiagnostics() {
+  const envVar = process.env.RESEND_API_KEY || process.env.RESEND_KEY || '';
+  const trimmedKey = envVar.trim();
+  const varPresent = trimmedKey.length > 0;
+  
+  let clientInitialized = false;
+  let initError: string | null = null;
+
+  if (varPresent) {
+    try {
+      const client = new Resend(trimmedKey);
+      if (client && client.emails) {
+        clientInitialized = true;
+      } else {
+        initError = 'El cliente de Resend se instanció pero falta el módulo de emails.';
+      }
+    } catch (err: any) {
+      initError = err.message || 'Error al instanciar el cliente de Resend con la clave provista.';
+    }
+  }
+
+  return {
+    varPresent,
+    keyLength: trimmedKey.length,
+    keyPrefix: trimmedKey.length > 0 ? `${trimmedKey.substring(0, 5)}...` : 'none',
+    startsWithRe: trimmedKey.startsWith('re_'),
+    clientInitialized,
+    initError,
+    fromEmail: process.env.RESEND_FROM_EMAIL || 'Rumbio <onboarding@resend.dev>',
+    envKeysChecked: {
+      RESEND_API_KEY_present: !!process.env.RESEND_API_KEY && process.env.RESEND_API_KEY.trim().length > 0,
+      RESEND_KEY_present: !!process.env.RESEND_KEY && process.env.RESEND_KEY.trim().length > 0,
+    },
+  };
+}
+
 function getResendClient(): Resend | null {
-  const apiKey = process.env.RESEND_API_KEY;
-  if (!apiKey || apiKey.trim() === '') {
+  const apiKey = (process.env.RESEND_API_KEY || process.env.RESEND_KEY || '').trim();
+  if (!apiKey) {
     return null;
   }
-  return new Resend(apiKey.trim());
+  try {
+    return new Resend(apiKey);
+  } catch (err) {
+    console.error('[Resend Init Error]', err);
+    return null;
+  }
 }
 
 // ============================================================================
@@ -498,9 +539,9 @@ app.use(express.json());
 
 // 1. Health & Config Status (Checks Supabase + Resend + Key Diagnostics)
 app.get('/api/health', async (req: Request, res: Response) => {
-  const hasResend = !!process.env.RESEND_API_KEY && process.env.RESEND_API_KEY.trim().length > 0;
+  const resendDiagnostics = getResendKeyDiagnostics();
   let supabaseStatus = 'disconnected';
-  const diagnostics = getSupabaseKeyDiagnostics();
+  const supabaseDiagnostics = getSupabaseKeyDiagnostics();
 
   try {
     const supabase = getSupabase();
@@ -518,9 +559,10 @@ app.get('/api/health', async (req: Request, res: Response) => {
     status: 'ok',
     service: 'Rumbio Production Backend Engine',
     database: supabaseStatus,
-    supabaseDiagnostics: diagnostics,
-    realEmailConfigured: hasResend,
-    resendFrom: process.env.RESEND_FROM_EMAIL || 'Rumbio <onboarding@resend.dev>',
+    supabaseDiagnostics,
+    resendDiagnostics,
+    realEmailConfigured: resendDiagnostics.clientInitialized,
+    resendFrom: resendDiagnostics.fromEmail,
     timestamp: new Date().toISOString(),
   });
 });
@@ -535,9 +577,10 @@ app.get('/api/email-logs', async (req: Request, res: Response) => {
       .order('created_at', { ascending: false })
       .limit(30);
 
-    const hasResend = !!process.env.RESEND_API_KEY && process.env.RESEND_API_KEY.trim().length > 0;
+    const resendDiagnostics = getResendKeyDiagnostics();
     res.json({
-      realEmailConfigured: hasResend,
+      realEmailConfigured: resendDiagnostics.clientInitialized,
+      resendDiagnostics,
       logs: logs || [],
     });
   } catch (err: any) {
