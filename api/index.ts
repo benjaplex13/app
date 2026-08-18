@@ -131,19 +131,76 @@ export function getSupabase(): SupabaseClient {
 }
 
 // ============================================================================
-// RESEND CLIENT & DIAGNOSTICS (Lazy Initialization & Safe Inspection)
+// RESEND CLIENT & DIAGNOSTICS (Lazy Initialization, Key Scanner & Safe Inspection)
 // ============================================================================
+export function findResendKeyInEnv(): { key: string; sourceVar: string } | null {
+  // 1. Direct check with exact standard names
+  const directCandidates = [
+    'RESEND_API_KEY',
+    'RESEND_KEY',
+    'RESEND_API_TOKEN',
+    'RESEND_TOKEN',
+    'RESEND_SECRET',
+    'VITE_RESEND_API_KEY',
+    'VITE_RESEND_KEY',
+  ];
+
+  for (const varName of directCandidates) {
+    const val = process.env[varName];
+    if (val && typeof val === 'string' && val.trim().length > 0) {
+      return { key: val.trim(), sourceVar: varName };
+    }
+  }
+
+  // 2. Dynamic scan over all process.env keys for any variation (case-insensitive or with whitespace)
+  const allEnvKeys = Object.keys(process.env);
+  for (const rawKey of allEnvKeys) {
+    if (rawKey.trim().toUpperCase().includes('RESEND')) {
+      const val = process.env[rawKey];
+      if (val && typeof val === 'string' && val.trim().length > 0) {
+        return { key: val.trim(), sourceVar: rawKey };
+      }
+    }
+  }
+
+  return null;
+}
+
 export function getResendKeyDiagnostics() {
-  const envVar = process.env.RESEND_API_KEY || process.env.RESEND_KEY || '';
-  const trimmedKey = envVar.trim();
-  const varPresent = trimmedKey.length > 0;
+  const allEnvKeys = Object.keys(process.env);
   
+  // Find all keys in process.env containing 'RESEND' (case-insensitive)
+  const resendRelatedKeys = allEnvKeys
+    .filter((k) => k.trim().toUpperCase().includes('RESEND'))
+    .map((k) => {
+      const val = process.env[k] || '';
+      const trimmedVal = val.trim();
+      return {
+        name: k,
+        trimmedName: k.trim(),
+        valueLength: trimmedVal.length,
+        startsWithRe: trimmedVal.startsWith('re_'),
+        hasWhitespaceInKeyName: k !== k.trim(),
+        hasWhitespaceInValue: val !== trimmedVal,
+        keyPrefix: trimmedVal.length > 0 ? `${trimmedVal.substring(0, 5)}...` : 'none',
+      };
+    });
+
+  // Also collect general environment metadata (without secret values)
+  const allAvailableEnvKeyNames = allEnvKeys
+    .filter((k) => !k.startsWith('npm_') && !k.startsWith('_'))
+    .sort();
+
+  const foundKeyInfo = findResendKeyInEnv();
+  const activeKey = foundKeyInfo?.key || '';
+  const varPresent = activeKey.length > 0;
+
   let clientInitialized = false;
   let initError: string | null = null;
 
   if (varPresent) {
     try {
-      const client = new Resend(trimmedKey);
+      const client = new Resend(activeKey);
       if (client && client.emails) {
         clientInitialized = true;
       } else {
@@ -156,26 +213,26 @@ export function getResendKeyDiagnostics() {
 
   return {
     varPresent,
-    keyLength: trimmedKey.length,
-    keyPrefix: trimmedKey.length > 0 ? `${trimmedKey.substring(0, 5)}...` : 'none',
-    startsWithRe: trimmedKey.startsWith('re_'),
+    detectedSourceVar: foundKeyInfo ? foundKeyInfo.sourceVar : null,
+    keyLength: activeKey.length,
+    keyPrefix: activeKey.length > 0 ? `${activeKey.substring(0, 5)}...` : 'none',
+    startsWithRe: activeKey.startsWith('re_'),
     clientInitialized,
     initError,
     fromEmail: process.env.RESEND_FROM_EMAIL || 'Rumbio <onboarding@resend.dev>',
-    envKeysChecked: {
-      RESEND_API_KEY_present: !!process.env.RESEND_API_KEY && process.env.RESEND_API_KEY.trim().length > 0,
-      RESEND_KEY_present: !!process.env.RESEND_KEY && process.env.RESEND_KEY.trim().length > 0,
-    },
+    allResendRelatedKeys: resendRelatedKeys,
+    totalEnvKeysCount: allEnvKeys.length,
+    allAvailableEnvKeyNames,
   };
 }
 
 function getResendClient(): Resend | null {
-  const apiKey = (process.env.RESEND_API_KEY || process.env.RESEND_KEY || '').trim();
-  if (!apiKey) {
+  const found = findResendKeyInEnv();
+  if (!found || !found.key) {
     return null;
   }
   try {
-    return new Resend(apiKey);
+    return new Resend(found.key);
   } catch (err) {
     console.error('[Resend Init Error]', err);
     return null;
