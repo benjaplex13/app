@@ -95,3 +95,11 @@ CREATE POLICY "Service Role Full Access Expenses" ON public.expenses
 
 CREATE POLICY "Service Role Full Access EmailLogs" ON public.email_logs
   FOR ALL TO service_role USING (true) WITH CHECK (true);
+
+-- Otorgar permisos explícitos de tabla a service_role
+GRANT ALL ON TABLE public.users TO service_role;
+GRANT ALL ON TABLE public.trips TO service_role;
+GRANT ALL ON TABLE public.expenses TO service_role;
+GRANT ALL ON TABLE public.email_logs TO service_role;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO service_role;
+

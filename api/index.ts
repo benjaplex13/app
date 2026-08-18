@@ -51,18 +51,72 @@ export interface ExpenseDoc {
 const JWT_SECRET = process.env.JWT_SECRET || 'rumbio_super_secure_jwt_secret_2026_travel_finance';
 
 // ============================================================================
-// SUPABASE CLIENT (Lazy Initialization)
+// SUPABASE CLIENT (Lazy Initialization & Safe Diagnostics)
 // ============================================================================
 let supabaseInstance: SupabaseClient | null = null;
+
+export function getSupabaseKeyDiagnostics() {
+  const url = process.env.SUPABASE_URL?.trim();
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+  const anonKey = process.env.SUPABASE_ANON_KEY?.trim();
+  const rawKey = serviceRoleKey || anonKey;
+
+  const isServiceRoleEnvSet = !!(serviceRoleKey && serviceRoleKey.length > 0);
+  const isAnonEnvSet = !!(anonKey && anonKey.length > 0);
+
+  if (!rawKey) {
+    return {
+      configured: false,
+      serviceRoleVarPresent: isServiceRoleEnvSet,
+      anonVarPresent: isAnonEnvSet,
+      detectedRole: 'none',
+      message: 'SUPABASE_SERVICE_ROLE_KEY no está configurada en las variables de entorno.',
+    };
+  }
+
+  let detectedRole = 'unknown';
+  try {
+    const parts = rawKey.split('.');
+    if (parts.length === 3) {
+      const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'));
+      detectedRole = payload.role || 'jwt_without_role';
+    } else if (rawKey.startsWith('sbp_')) {
+      detectedRole = 'service_role_token';
+    }
+  } catch {
+    detectedRole = 'opaque_token';
+  }
+
+  return {
+    configured: true,
+    serviceRoleVarPresent: isServiceRoleEnvSet,
+    anonVarPresent: isAnonEnvSet,
+    keyLength: rawKey.length,
+    keyPrefix: rawKey.substring(0, 10) + '...',
+    detectedRole: detectedRole,
+    isProperServiceRole: detectedRole === 'service_role' || detectedRole === 'service_role_token',
+    urlHost: url ? (() => { try { return new URL(url).hostname; } catch { return url; } })() : 'missing_url',
+    warning: detectedRole === 'anon'
+      ? 'ALERTA: La clave configurada tiene rol "anon". Debes copiar la clave "service_role (secret)" desde Supabase > Project Settings > API > service_role.'
+      : null,
+  };
+}
 
 export function getSupabase(): SupabaseClient {
   if (!supabaseInstance) {
     const supabaseUrl = process.env.SUPABASE_URL?.trim();
-    const supabaseKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY)?.trim();
+    // Strictly require SUPABASE_SERVICE_ROLE_KEY (never use anon key)
+    const supabaseKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY)?.trim();
 
-    if (!supabaseUrl || !supabaseKey) {
+    if (!supabaseUrl) {
       throw new Error(
-        'Las variables de entorno SUPABASE_URL y SUPABASE_SERVICE_ROLE_KEY no están configuradas en el servidor. Configúralas en tu panel de Vercel y AI Studio.'
+        'La variable de entorno SUPABASE_URL no está configurada en el servidor. Configúrala en tu panel de Vercel y AI Studio.'
+      );
+    }
+
+    if (!supabaseKey) {
+      throw new Error(
+        'La variable de entorno SUPABASE_SERVICE_ROLE_KEY no está configurada en el servidor. Configúrala en tu panel de Vercel y AI Studio con la clave secreta service_role de Supabase.'
       );
     }
 
@@ -442,10 +496,11 @@ app.use(express.json());
 // API ROUTES
 // ============================================================================
 
-// 1. Health & Config Status (Checks Supabase + Resend)
+// 1. Health & Config Status (Checks Supabase + Resend + Key Diagnostics)
 app.get('/api/health', async (req: Request, res: Response) => {
   const hasResend = !!process.env.RESEND_API_KEY && process.env.RESEND_API_KEY.trim().length > 0;
   let supabaseStatus = 'disconnected';
+  const diagnostics = getSupabaseKeyDiagnostics();
 
   try {
     const supabase = getSupabase();
@@ -463,6 +518,7 @@ app.get('/api/health', async (req: Request, res: Response) => {
     status: 'ok',
     service: 'Rumbio Production Backend Engine',
     database: supabaseStatus,
+    supabaseDiagnostics: diagnostics,
     realEmailConfigured: hasResend,
     resendFrom: process.env.RESEND_FROM_EMAIL || 'Rumbio <onboarding@resend.dev>',
     timestamp: new Date().toISOString(),
