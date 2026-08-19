@@ -161,6 +161,15 @@ export const api = {
       realEmailConfigured: boolean;
       resendFrom: string;
       service: string;
+      demoOtpActive?: boolean;
+      demoOtpCode?: string | null;
     }>('/api/health');
+  },
+
+  async getAuthConfig() {
+    return apiFetch<{
+      demoOtpActive: boolean;
+      demoOtpCode: string | null;
+    }>('/api/auth/config');
   },
 };

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Compass, 
   Mail, 
@@ -19,6 +19,7 @@ import { CurrencyCode, User } from '../types';
 import { CURRENCIES } from '../data/currencies';
 import { api } from '../utils/api';
 import { RumbioLogo } from '../components/RumbioLogo';
+import { OtpInput } from '../components/OtpInput';
 
 interface AuthViewProps {
   onLoginSuccess: (user: User) => void;
@@ -39,6 +40,30 @@ export const AuthView: React.FC<AuthViewProps> = ({
   const [homeCurrency, setHomeCurrency] = useState<CurrencyCode>('USD');
   const [isLoading, setIsLoading] = useState(false);
   const [logoClicks, setLogoClicks] = useState(0);
+  const [demoConfig, setDemoConfig] = useState<{
+    demoOtpActive: boolean;
+    demoOtpCode: string | null;
+  }>({
+    demoOtpActive: false,
+    demoOtpCode: null,
+  });
+
+  // Load server-side auth & demo configuration on mount
+  useEffect(() => {
+    let isMounted = true;
+    api.getAuthConfig()
+      .then((cfg) => {
+        if (isMounted) {
+          setDemoConfig(cfg);
+        }
+      })
+      .catch(() => {
+        // Silently fail if offline or not reachable
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const handleLogoEasterEgg = () => {
     const next = logoClicks + 1;
@@ -390,7 +415,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
 
         {/* ================= OTP VERIFICATION FORM ================= */}
         {mode === 'verify' && (
-          <form onSubmit={handleVerifySubmit} className="space-y-4">
+          <form onSubmit={handleVerifySubmit} className="space-y-5">
             <div className="p-4 bg-blue-950/40 border border-blue-500/30 rounded-2xl text-xs text-cyan-200 flex items-start space-x-3">
               <ShieldCheck className="w-5 h-5 flex-shrink-0 text-cyan-400 mt-0.5" />
               <div>
@@ -401,25 +426,29 @@ export const AuthView: React.FC<AuthViewProps> = ({
               </div>
             </div>
 
-            <div>
-              <label className="block text-[11px] font-semibold text-slate-400 uppercase tracking-widest mb-2 text-center">
-                Código de 6 dígitos
+            <div className="space-y-2">
+              <label className="block text-[11px] font-semibold text-slate-400 uppercase tracking-widest text-center">
+                Ingresa el código de 6 dígitos
               </label>
-              <input
-                type="text"
-                required
-                maxLength={6}
+              
+              <OtpInput
+                length={6}
                 value={verifyCode}
-                onChange={(e) => setVerifyCode(e.target.value)}
-                placeholder="• • • • • •"
-                className="w-full text-center text-3xl tracking-widest font-mono font-extrabold bg-slate-900 border border-white/10 rounded-2xl py-3.5 text-cyan-400 focus:border-blue-500 focus:outline-none"
+                onChange={setVerifyCode}
+                onComplete={(code) => {
+                  setVerifyCode(code);
+                }}
+                disabled={isLoading}
+                autoFocus={true}
+                isDemoActive={demoConfig.demoOtpActive}
+                demoCode={demoConfig.demoOtpCode}
               />
             </div>
 
             <button
               type="submit"
-              disabled={isLoading}
-              className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold py-3.5 rounded-2xl shadow-xl shadow-emerald-600/25 transition-all flex items-center justify-center space-x-2 text-sm"
+              disabled={isLoading || verifyCode.length < 6}
+              className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:opacity-50 text-white font-bold py-3.5 rounded-2xl shadow-xl shadow-emerald-600/25 transition-all flex items-center justify-center space-x-2 text-sm cursor-pointer active:scale-95"
             >
               {isLoading ? (
                 <>
@@ -434,11 +463,11 @@ export const AuthView: React.FC<AuthViewProps> = ({
               )}
             </button>
 
-            <div className="flex justify-between items-center text-xs text-slate-400 pt-2">
+            <div className="flex justify-between items-center text-xs text-slate-400 pt-1">
               <button
                 type="button"
                 onClick={() => setMode('register')}
-                className="hover:text-slate-200"
+                className="hover:text-slate-200 cursor-pointer"
               >
                 Volver
               </button>
@@ -446,7 +475,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
                 type="button"
                 onClick={handleResendCode}
                 disabled={isLoading}
-                className="text-cyan-400 font-semibold hover:underline flex items-center gap-1"
+                className="text-cyan-400 font-semibold hover:underline flex items-center gap-1 cursor-pointer"
               >
                 <RefreshCw className="w-3 h-3" /> Reenviar código
               </button>
@@ -481,7 +510,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
             <button
               type="submit"
               disabled={isLoading}
-              className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold py-3.5 rounded-2xl shadow-xl shadow-blue-600/20 transition-all text-sm"
+              className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold py-3.5 rounded-2xl shadow-xl shadow-blue-600/20 transition-all text-sm cursor-pointer active:scale-95"
             >
               {isLoading ? 'Enviando código...' : 'Enviar Código de Recuperación'}
             </button>
@@ -490,7 +519,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
               <button
                 type="button"
                 onClick={() => setMode('login')}
-                className="text-cyan-400 font-bold hover:underline"
+                className="text-cyan-400 font-bold hover:underline cursor-pointer"
               >
                 Volver al inicio de sesión
               </button>
@@ -501,18 +530,21 @@ export const AuthView: React.FC<AuthViewProps> = ({
         {/* ================= RESET PASSWORD WITH CODE FORM ================= */}
         {mode === 'reset-password' && (
           <form onSubmit={handleResetPasswordSubmit} className="space-y-4">
-            <div>
-              <label className="block text-[11px] font-semibold text-slate-400 uppercase tracking-widest mb-1.5 text-center">
+            <div className="space-y-2">
+              <label className="block text-[11px] font-semibold text-slate-400 uppercase tracking-widest text-center">
                 Código de 6 dígitos recibido
               </label>
-              <input
-                type="text"
-                required
-                maxLength={6}
+              <OtpInput
+                length={6}
                 value={verifyCode}
-                onChange={(e) => setVerifyCode(e.target.value)}
-                placeholder="123456"
-                className="w-full text-center text-2xl tracking-widest font-mono font-bold bg-slate-900 border border-white/10 rounded-2xl py-3 text-cyan-400 focus:border-blue-500 focus:outline-none"
+                onChange={setVerifyCode}
+                onComplete={(code) => {
+                  setVerifyCode(code);
+                }}
+                disabled={isLoading}
+                autoFocus={true}
+                isDemoActive={demoConfig.demoOtpActive}
+                demoCode={demoConfig.demoOtpCode}
               />
             </div>
 
@@ -536,8 +568,8 @@ export const AuthView: React.FC<AuthViewProps> = ({
 
             <button
               type="submit"
-              disabled={isLoading}
-              className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold py-3.5 rounded-2xl shadow-xl shadow-emerald-600/25 transition-all text-sm"
+              disabled={isLoading || verifyCode.length < 6}
+              className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold py-3.5 rounded-2xl shadow-xl shadow-emerald-600/25 transition-all text-sm cursor-pointer active:scale-95"
             >
               {isLoading ? 'Actualizando contraseña...' : 'Restablecer y Cifrar Contraseña'}
             </button>
@@ -546,7 +578,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
               <button
                 type="button"
                 onClick={() => setMode('login')}
-                className="text-cyan-400 font-bold hover:underline"
+                className="text-cyan-400 font-bold hover:underline cursor-pointer"
               >
                 Cancelar y volver
               </button>

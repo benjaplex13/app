@@ -585,6 +585,18 @@ export function verifyAuth(req: AuthenticatedRequest, res: Response, next: NextF
 }
 
 // ============================================================================
+// DEMO OTP CONFIG HELPER
+// ============================================================================
+export function getDemoOtpConfig() {
+  const rawDemo = (process.env.DEMO_OTP_CODE || '').trim();
+  const isDemoActive = rawDemo.length > 0;
+  return {
+    demoOtpActive: isDemoActive,
+    demoOtpCode: isDemoActive ? rawDemo : null,
+  };
+}
+
+// ============================================================================
 // EXPRESS APP INITIALIZATION
 // ============================================================================
 export const app = express();
@@ -594,11 +606,21 @@ app.use(express.json());
 // API ROUTES
 // ============================================================================
 
-// 1. Health & Config Status (Checks Supabase + Resend + Key Diagnostics)
+// 0. Public Auth & Demo Config Endpoint
+app.get('/api/auth/config', (req: Request, res: Response) => {
+  const demoConfig = getDemoOtpConfig();
+  res.json({
+    demoOtpActive: demoConfig.demoOtpActive,
+    demoOtpCode: demoConfig.demoOtpCode,
+  });
+});
+
+// 1. Health & Config Status (Checks Supabase + Resend + Key Diagnostics + Demo Mode)
 app.get('/api/health', async (req: Request, res: Response) => {
   const resendDiagnostics = getResendKeyDiagnostics();
   let supabaseStatus = 'disconnected';
   const supabaseDiagnostics = getSupabaseKeyDiagnostics();
+  const demoConfig = getDemoOtpConfig();
 
   try {
     const supabase = getSupabase();
@@ -618,6 +640,8 @@ app.get('/api/health', async (req: Request, res: Response) => {
     database: supabaseStatus,
     supabaseDiagnostics,
     resendDiagnostics,
+    demoOtpActive: demoConfig.demoOtpActive,
+    demoOtpCode: demoConfig.demoOtpCode,
     realEmailConfigured: resendDiagnostics.clientInitialized,
     resendFrom: resendDiagnostics.fromEmail,
     timestamp: new Date().toISOString(),
@@ -756,6 +780,7 @@ app.post('/api/auth/verify-otp', async (req: Request, res: Response) => {
 
     const supabase = getSupabase();
     const normalizedEmail = email.trim().toLowerCase();
+    const inputCode = String(code).trim();
 
     const { data: userRow, error: userError } = await supabase
       .from('users')
@@ -768,12 +793,16 @@ app.post('/api/auth/verify-otp', async (req: Request, res: Response) => {
     }
 
     const user = mapUserFromDb(userRow);
+    const { demoOtpActive, demoOtpCode } = getDemoOtpConfig();
 
-    if (!user.verificationCode || user.verificationCode !== code.trim()) {
+    const isDemoMatch = Boolean(demoOtpActive && demoOtpCode && inputCode === demoOtpCode);
+    const isRealMatch = Boolean(user.verificationCode && user.verificationCode === inputCode);
+
+    if (!isDemoMatch && !isRealMatch) {
       return res.status(400).json({ error: 'Código de verificación incorrecto.' });
     }
 
-    if (user.verificationCodeExpires && Date.now() > user.verificationCodeExpires) {
+    if (!isDemoMatch && user.verificationCodeExpires && Date.now() > user.verificationCodeExpires) {
       return res.status(400).json({ error: 'El código ha expirado. Por favor solicita uno nuevo.' });
     }
 
@@ -1004,6 +1033,7 @@ app.post('/api/auth/reset-password', async (req: Request, res: Response) => {
 
     const supabase = getSupabase();
     const normalizedEmail = email.trim().toLowerCase();
+    const inputCode = String(code).trim();
 
     const { data: userRow } = await supabase
       .from('users')
@@ -1011,11 +1041,19 @@ app.post('/api/auth/reset-password', async (req: Request, res: Response) => {
       .eq('email', normalizedEmail)
       .maybeSingle();
 
-    if (!userRow || userRow.verification_code !== code.trim()) {
-      return res.status(400).json({ error: 'Código de recuperación inválido o expirado.' });
+    if (!userRow) {
+      return res.status(404).json({ error: 'Usuario no encontrado.' });
     }
 
-    if (userRow.verification_code_expires && Date.now() > Number(userRow.verification_code_expires)) {
+    const { demoOtpActive, demoOtpCode } = getDemoOtpConfig();
+    const isDemoMatch = Boolean(demoOtpActive && demoOtpCode && inputCode === demoOtpCode);
+    const isRealMatch = Boolean(userRow.verification_code && userRow.verification_code === inputCode);
+
+    if (!isDemoMatch && !isRealMatch) {
+      return res.status(400).json({ error: 'Código de recuperación inválido o incorrecto.' });
+    }
+
+    if (!isDemoMatch && userRow.verification_code_expires && Date.now() > Number(userRow.verification_code_expires)) {
       return res.status(400).json({ error: 'El código ha expirado.' });
     }
 
