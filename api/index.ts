@@ -292,121 +292,6 @@ function mapExpenseFromDb(row: any): ExpenseDoc {
 }
 
 // ============================================================================
-// INITIAL SEEDING HELPER IN SUPABASE (For Brand New Users)
-// ============================================================================
-async function seedInitialTripInSupabase(userId: string, userName: string, homeCurrency: string) {
-  const supabase = getSupabase();
-  const sampleTripId = 'trip_' + Date.now();
-  const today = new Date().toISOString().split('T')[0];
-
-  const sampleTrip = {
-    id: sampleTripId,
-    user_id: userId,
-    name: 'Aventura en Japón 🇯🇵',
-    destination: 'Tokio, Kioto & Osaka',
-    start_date: new Date(Date.now() + 10 * 86400000).toISOString().split('T')[0],
-    end_date: new Date(Date.now() + 24 * 86400000).toISOString().split('T')[0],
-    budget: homeCurrency === 'USD' ? 3200 : homeCurrency === 'EUR' ? 2950 : 2500000,
-    currency: 'JPY',
-    exchange_rate: homeCurrency === 'USD' ? 0.0066 : homeCurrency === 'EUR' ? 0.0061 : 5.8,
-    members: ['Yo', 'Carlos', 'Valeria'],
-    checklist: [
-      { id: 'chk_1', title: 'Pasaporte vigente (mínimo 6 meses)', category: 'Documentos', isCompleted: true },
-      { id: 'chk_2', title: 'Comprar pase de tren JR Pass', category: 'Pagos', amount: 350, dueDate: '2026-08-25', isCompleted: true },
-      { id: 'chk_3', title: 'Contratar seguro médico internacional', category: 'Salud', amount: 95, dueDate: '2026-08-20', isCompleted: true },
-      { id: 'chk_4', title: 'Activar tarjeta eSIM de datos ilimitados', category: 'Reservas', amount: 30, isCompleted: false },
-      { id: 'chk_5', title: 'Reservar entrada a teamLab Planets', category: 'Reservas', amount: 38, isCompleted: false },
-    ],
-    plans: [
-      { id: 'pl_1', category: 'Alojamiento', estimatedAmount: 1100, notes: 'Hoteles en Shinjuku y Ryokan tradicional en Kioto' },
-      { id: 'pl_2', category: 'Comida', estimatedAmount: 850, notes: 'Ramen, sushi en Tsukiji y comida callejera en Dotonbori' },
-      { id: 'pl_3', category: 'Transporte', estimatedAmount: 450, notes: 'Shinkansen bala y metro de Tokio' },
-      { id: 'pl_4', category: 'Actividades', estimatedAmount: 380, notes: 'Templos, museos y mirador Shibuya Sky' },
-      { id: 'pl_5', category: 'Compras', estimatedAmount: 300, notes: 'Souvenirs en Akihabara y té matcha' },
-      { id: 'pl_6', category: 'Imprevistos', estimatedAmount: 120, notes: 'Fondo de emergencia' },
-    ],
-    created_at: new Date().toISOString(),
-  };
-
-  await supabase.from('trips').insert(sampleTrip);
-
-  const sampleExpenses = [
-    {
-      id: 'exp_1',
-      trip_id: sampleTripId,
-      user_id: userId,
-      title: 'Hotel Gracery Shinjuku (3 Noches)',
-      amount: 68000,
-      currency: 'JPY',
-      category: 'Alojamiento',
-      date: today,
-      paid_by: 'Yo',
-      split_between: ['Yo', 'Carlos', 'Valeria'],
-      notes: 'Habitación triple con vista a la ciudad',
-      created_at: new Date().toISOString(),
-    },
-    {
-      id: 'exp_2',
-      trip_id: sampleTripId,
-      user_id: userId,
-      title: 'Cena de Bienvenida: Ramen Ichiran & Gyoza',
-      amount: 5400,
-      currency: 'JPY',
-      category: 'Comida',
-      date: today,
-      paid_by: 'Carlos',
-      split_between: ['Yo', 'Carlos', 'Valeria'],
-      notes: 'Ramen tonkotsu clásico con extras',
-      created_at: new Date().toISOString(),
-    },
-    {
-      id: 'exp_3',
-      trip_id: sampleTripId,
-      user_id: userId,
-      title: 'Boletos Tren Shinkansen Tokio - Kioto',
-      amount: 42000,
-      currency: 'JPY',
-      category: 'Transporte',
-      date: today,
-      paid_by: 'Valeria',
-      split_between: ['Yo', 'Carlos', 'Valeria'],
-      notes: 'Asientos reservados en tren bala',
-      created_at: new Date().toISOString(),
-    },
-    {
-      id: 'exp_4',
-      trip_id: sampleTripId,
-      user_id: userId,
-      title: 'Entradas Museo Digital teamLab Planets',
-      amount: 11400,
-      currency: 'JPY',
-      category: 'Actividades',
-      date: today,
-      paid_by: 'Yo',
-      split_between: ['Yo', 'Carlos', 'Valeria'],
-      notes: 'Horario estelar 18:00 hrs',
-      created_at: new Date().toISOString(),
-    },
-    {
-      id: 'exp_5',
-      trip_id: sampleTripId,
-      user_id: userId,
-      title: 'Té Matcha Ceremonial & Dulces Wagashi en Uji',
-      amount: 3200,
-      currency: 'JPY',
-      category: 'Comida',
-      date: today,
-      paid_by: 'Yo',
-      split_between: ['Yo'],
-      notes: 'Experiencia tradicional japonesa',
-      created_at: new Date().toISOString(),
-    },
-  ];
-
-  await supabase.from('expenses').insert(sampleExpenses);
-}
-
-// ============================================================================
 // REAL EMAIL SENDER WITH RESEND & AUDIT LOG IN SUPABASE
 // ============================================================================
 async function sendEmailNotification(
@@ -820,17 +705,7 @@ app.post('/api/auth/verify-otp', async (req: Request, res: Response) => {
       throw new Error(`Error al activar cuenta: ${updateError.message}`);
     }
 
-    // Check if user has trips in Supabase; if 0, seed sample trip
-    const { count: tripCount } = await supabase
-      .from('trips')
-      .select('*', { count: 'exact', head: true })
-      .eq('user_id', user.id);
-
-    if (!tripCount || tripCount === 0) {
-      await seedInitialTripInSupabase(user.id, user.name, user.homeCurrency);
-    }
-
-    // Generate JWT Token
+    // Generate JWT Token (Clean start: no seed data inserted)
     const token = jwt.sign(
       { id: user.id, email: user.email, name: user.name },
       JWT_SECRET,

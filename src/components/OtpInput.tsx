@@ -1,5 +1,4 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
 import { Sparkles, Copy, Check } from 'lucide-react';
 
 interface OtpInputProps {
@@ -133,82 +132,57 @@ export const OtpInput: React.FC<OtpInputProps> = ({
         {Array.from({ length }).map((_, index) => {
           const isFocused = focusedIndex === index;
           const isFilled = Boolean(digits[index]);
-          const isActive = isFocused || isFilled;
 
           return (
             <div
               key={index}
-              className="relative flex-1 max-w-[54px] aspect-[4/5] sm:aspect-square flex items-center justify-center group"
+              className={`otp-node relative flex-1 max-w-[54px] aspect-[4/5] sm:aspect-square flex items-center justify-center group ${
+                isFilled ? 'has-value' : ''
+              } ${isFocused ? 'is-focused' : ''}`}
             >
-              {/* Animated Glowing Gradient Aura */}
-              <AnimatePresence>
-                {isFocused && (
-                  <motion.div
-                    initial={{ opacity: 0, scale: 0.85 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    exit={{ opacity: 0, scale: 0.85 }}
-                    transition={{ duration: 0.25 }}
-                    className="absolute -inset-1 bg-gradient-to-r from-cyan-500/30 via-blue-600/30 to-sky-400/30 rounded-2xl blur-md pointer-events-none"
-                  />
-                )}
-              </AnimatePresence>
+              {/* Ambient Glow behind focused cell */}
+              {isFocused && (
+                <div className="absolute -inset-1 bg-cyan-500/20 rounded-2xl blur-md pointer-events-none transition-all duration-300" />
+              )}
 
-              {/* Cell Background & Base Border */}
+              {/* Cell Container */}
               <div
-                className={`w-full h-full rounded-2xl flex items-center justify-center transition-all duration-300 relative overflow-hidden backdrop-blur-md ${
+                className={`w-full h-full rounded-2xl flex items-center justify-center transition-all duration-200 relative overflow-hidden backdrop-blur-md ${
                   isFocused
-                    ? 'bg-slate-900/90 shadow-lg shadow-cyan-500/10'
+                    ? 'bg-slate-900/95 shadow-lg shadow-cyan-500/10'
                     : isFilled
-                    ? 'bg-slate-900/80 border border-cyan-500/30'
-                    : 'bg-slate-950/60 border border-slate-800/80 hover:border-slate-700'
+                    ? 'bg-slate-900/90'
+                    : 'bg-slate-950/70 hover:bg-slate-900/50'
                 }`}
               >
-                {/* SVG Animated Perimeter Stroke (Traced stroke around the box) */}
+                {/* SVG Pure CSS Animated Trace */}
                 <svg
                   className="absolute inset-0 w-full h-full pointer-events-none"
                   viewBox="0 0 100 100"
                   preserveAspectRatio="none"
                 >
-                  <defs>
-                    <linearGradient id={`strokeGrad-${index}`} x1="0%" y1="0%" x2="100%" y2="100%">
-                      <stop offset="0%" stopColor="#22d3ee" />
-                      <stop offset="50%" stopColor="#38bdf8" />
-                      <stop offset="100%" stopColor="#3b82f6" />
-                    </linearGradient>
-                  </defs>
-                  
-                  {/* Subtle track */}
+                  {/* Static background track */}
                   <rect
+                    className="trace-track"
                     x="2"
                     y="2"
                     width="96"
                     height="96"
-                    rx="18"
-                    fill="none"
-                    stroke={isActive ? 'rgba(56, 189, 248, 0.15)' : 'transparent'}
-                    strokeWidth="2"
+                    rx="16"
+                    pathLength="100"
                   />
 
-                  {/* Animated stroke trace */}
-                  <motion.rect
+                  {/* Animated drawing trace: triggers CSS keyframe on focus or value entry */}
+                  <rect
+                    key={`trace-${index}-${digits[index] || 'empty'}-${isFocused ? 'foc' : 'blur'}`}
+                    className="trace"
                     x="2"
                     y="2"
                     width="96"
                     height="96"
-                    rx="18"
-                    fill="none"
-                    stroke={`url(#strokeGrad-${index})`}
-                    strokeWidth={isFocused ? '2.5' : isFilled ? '2' : '0'}
-                    strokeDasharray="400"
-                    initial={{ strokeDashoffset: 400 }}
-                    animate={{
-                      strokeDashoffset: isFocused ? 0 : isFilled ? 0 : 400,
-                      opacity: isActive ? 1 : 0,
-                    }}
-                    transition={{
-                      duration: isFocused ? 0.45 : 0.3,
-                      ease: 'easeInOut',
-                    }}
+                    rx="16"
+                    pathLength="100"
+                    strokeWidth="2.5"
                   />
                 </svg>
 
@@ -231,13 +205,9 @@ export const OtpInput: React.FC<OtpInputProps> = ({
                   aria-label={`Dígito ${index + 1} del código de verificación`}
                 />
 
-                {/* Blinking animated indicator dot when focused and empty */}
+                {/* Blinking indicator dot when focused and empty */}
                 {isFocused && !digits[index] && (
-                  <motion.div
-                    animate={{ opacity: [0, 1, 0] }}
-                    transition={{ duration: 1, repeat: Infinity }}
-                    className="absolute w-2 h-0.5 bg-cyan-400 rounded-full bottom-2.5 pointer-events-none"
-                  />
+                  <div className="absolute w-2 h-0.5 bg-cyan-400 rounded-full bottom-2.5 pointer-events-none animate-pulse" />
                 )}
               </div>
             </div>
@@ -247,10 +217,9 @@ export const OtpInput: React.FC<OtpInputProps> = ({
 
       {/* Demo Code Indicator (Only visible if isDemoActive === true and demoCode is provided) */}
       {isDemoActive && demoCode && (
-        <motion.div
-          initial={{ opacity: 0, y: -4 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="mt-3 flex items-center justify-center gap-1.5 text-xs text-slate-400 font-mono"
+        <div
+          className="mt-3 flex items-center justify-center gap-1.5 text-xs text-slate-400 font-mono transition-opacity duration-300"
+          id="otp-demo-hint"
         >
           <span className="text-[11px] text-slate-400">Demo code:</span>
           <button
@@ -267,7 +236,7 @@ export const OtpInput: React.FC<OtpInputProps> = ({
               <Copy className="w-2.5 h-2.5 text-slate-400 group-hover:text-cyan-200 ml-0.5 opacity-60" />
             )}
           </button>
-        </motion.div>
+        </div>
       )}
     </div>
   );
