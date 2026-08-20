@@ -1,4 +1,4 @@
-import { User, Trip, Expense, CurrencyCode } from '../types';
+import { User, Trip, Expense, CurrencyCode, UserSubscription, PlanTier, BillingCycle, CheckoutResponse } from '../types';
 
 const TOKEN_KEY = 'rumbio_jwt_token_v1';
 
@@ -147,6 +147,24 @@ export const api = {
   async deleteExpense(expenseId: string) {
     return apiFetch<{ message: string }>(`/api/expenses/${expenseId}`, {
       method: 'DELETE',
+    });
+  },
+
+  // Subscriptions & Flow.cl Integration
+  async getSubscription() {
+    return apiFetch<UserSubscription>('/api/subscriptions/me');
+  },
+
+  async createSubscriptionCheckout(plan: PlanTier, billingCycle: BillingCycle) {
+    return apiFetch<CheckoutResponse>('/api/subscriptions/create-checkout', {
+      method: 'POST',
+      body: JSON.stringify({ plan, billingCycle }),
+    });
+  },
+
+  async cancelSubscription() {
+    return apiFetch<{ message: string; subscription: UserSubscription }>('/api/subscriptions/cancel', {
+      method: 'POST',
     });
   },
 

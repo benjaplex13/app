@@ -63,6 +63,37 @@ CREATE TABLE IF NOT EXISTS public.email_logs (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- 5. Tabla de Suscripciones (Control de Planes: Free, Pro, Premium)
+CREATE TABLE IF NOT EXISTS public.subscriptions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT UNIQUE NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+  plan TEXT NOT NULL DEFAULT 'free' CHECK (plan IN ('free', 'pro', 'premium')),
+  billing_cycle TEXT CHECK (billing_cycle IN ('monthly', 'annual')),
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'canceled', 'past_due', 'expired')),
+  provider TEXT CHECK (provider IN ('flow', 'mercadopago')),
+  provider_subscription_id TEXT,
+  current_period_end TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 6. Tabla de Órdenes y Pagos de Suscripción (Auditoría de Flow.cl)
+CREATE TABLE IF NOT EXISTS public.subscription_orders (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+  commerce_order TEXT UNIQUE NOT NULL,
+  flow_token TEXT,
+  plan TEXT NOT NULL CHECK (plan IN ('pro', 'premium')),
+  billing_cycle TEXT NOT NULL CHECK (billing_cycle IN ('monthly', 'annual')),
+  amount NUMERIC NOT NULL,
+  currency TEXT DEFAULT 'CLP',
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'paid', 'rejected', 'canceled')),
+  flow_order_id TEXT,
+  payment_data JSONB,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- ============================================================================
 -- ÍNDICES PARA RENDIMIENTO RÁPIDO EN CONSULTAS
 -- ============================================================================
@@ -71,6 +102,10 @@ CREATE INDEX IF NOT EXISTS idx_trips_user_id ON public.trips(user_id);
 CREATE INDEX IF NOT EXISTS idx_expenses_trip_id ON public.expenses(trip_id);
 CREATE INDEX IF NOT EXISTS idx_expenses_user_id ON public.expenses(user_id);
 CREATE INDEX IF NOT EXISTS idx_email_logs_created_at ON public.email_logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_user_id ON public.subscriptions(user_id);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_status ON public.subscriptions(status);
+CREATE INDEX IF NOT EXISTS idx_subscription_orders_user_id ON public.subscription_orders(user_id);
+CREATE INDEX IF NOT EXISTS idx_subscription_orders_commerce_order ON public.subscription_orders(commerce_order);
 
 -- ============================================================================
 -- HABILITAR ROW LEVEL SECURITY (RLS)
@@ -82,6 +117,8 @@ ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.trips ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.expenses ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.email_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.subscriptions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.subscription_orders ENABLE ROW LEVEL SECURITY;
 
 -- Políticas de seguridad para acceso por Service Role
 CREATE POLICY "Service Role Full Access Users" ON public.users
@@ -96,10 +133,18 @@ CREATE POLICY "Service Role Full Access Expenses" ON public.expenses
 CREATE POLICY "Service Role Full Access EmailLogs" ON public.email_logs
   FOR ALL TO service_role USING (true) WITH CHECK (true);
 
+CREATE POLICY "Service Role Full Access Subscriptions" ON public.subscriptions
+  FOR ALL TO service_role USING (true) WITH CHECK (true);
+
+CREATE POLICY "Service Role Full Access SubscriptionOrders" ON public.subscription_orders
+  FOR ALL TO service_role USING (true) WITH CHECK (true);
+
 -- Otorgar permisos explícitos de tabla a service_role
 GRANT ALL ON TABLE public.users TO service_role;
 GRANT ALL ON TABLE public.trips TO service_role;
 GRANT ALL ON TABLE public.expenses TO service_role;
 GRANT ALL ON TABLE public.email_logs TO service_role;
+GRANT ALL ON TABLE public.subscriptions TO service_role;
+GRANT ALL ON TABLE public.subscription_orders TO service_role;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO service_role;
 

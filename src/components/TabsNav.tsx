@@ -6,15 +6,17 @@ import {
   Users, 
   Calculator, 
   CheckSquare, 
-  UserCog 
+  UserCog,
+  Crown
 } from 'lucide-react';
-import { TabType } from '../types';
+import { TabType, PlanTier } from '../types';
 
 interface TabsNavProps {
   currentTab: TabType;
   onTabChange: (tab: TabType) => void;
   expenseCount: number;
   pendingChecklistCount: number;
+  userPlan?: PlanTier;
 }
 
 export const TabsNav: React.FC<TabsNavProps> = ({
@@ -22,6 +24,7 @@ export const TabsNav: React.FC<TabsNavProps> = ({
   onTabChange,
   expenseCount,
   pendingChecklistCount,
+  userPlan = 'free',
 }) => {
   const tabs = [
     { id: 'overview' as TabType, label: 'Resumen & Gráficos', icon: LayoutDashboard },
@@ -30,6 +33,17 @@ export const TabsNav: React.FC<TabsNavProps> = ({
     { id: 'split' as TabType, label: 'Dividir Cuentas (Split)', icon: Users },
     { id: 'planner' as TabType, label: 'Planificación Previa', icon: Calculator },
     { id: 'checklist' as TabType, label: 'Checklist & Pagos', icon: CheckSquare, badge: pendingChecklistCount > 0 ? pendingChecklistCount : undefined, badgeColor: 'bg-amber-500/20 text-amber-300 border-amber-500/30' },
+    { 
+      id: 'plans' as TabType, 
+      label: 'Planes & Precios', 
+      icon: Crown, 
+      badge: userPlan !== 'free' ? userPlan.toUpperCase() : 'MEJORAR',
+      badgeColor: userPlan === 'premium' 
+        ? 'bg-amber-500/20 text-amber-300 border-amber-500/30' 
+        : userPlan === 'pro'
+        ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/30'
+        : 'bg-gradient-to-r from-blue-600 to-cyan-500 text-white border-cyan-400/40'
+    },
     { id: 'profile' as TabType, label: 'Mi Perfil & Divisas', icon: UserCog },
   ];
 

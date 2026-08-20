@@ -7,10 +7,13 @@ import {
   ToastNotification, 
   CurrencyCode,
   ChecklistItem,
-  PlanItem
+  PlanItem,
+  UserSubscription,
+  PlanTier
 } from './types';
 import { api, getStoredToken, removeStoredToken } from './utils/api';
 import { convertToHomeCurrency } from './utils/finance';
+import confetti from 'canvas-confetti';
 import { AuthView } from './views/AuthView';
 import { OverviewView } from './views/OverviewView';
 import { ExpensesView } from './views/ExpensesView';
@@ -19,6 +22,7 @@ import { SplitView } from './views/SplitView';
 import { PlannerView } from './views/PlannerView';
 import { ChecklistView } from './views/ChecklistView';
 import { ProfileView } from './views/ProfileView';
+import { PlansView } from './views/PlansView';
 import { Navbar } from './components/Navbar';
 import { TabsNav } from './components/TabsNav';
 import { TripModal } from './components/TripModal';
@@ -26,6 +30,7 @@ import { ExpenseModal } from './components/ExpenseModal';
 import { OnboardingModal } from './components/OnboardingModal';
 import { ToastContainer } from './components/ToastContainer';
 import { LogoBrandModal } from './components/LogoBrandModal';
+import { PlanGateModal } from './components/PlanGateModal';
 import { LogoConcept } from './components/RumbioLogo';
 import { Compass, Plus, Loader2 } from 'lucide-react';
 
@@ -36,6 +41,15 @@ export function App() {
   const [activeTripId, setActiveTripId] = useState<string | null>(null);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [currentTab, setCurrentTab] = useState<TabType>('overview');
+  const [subscription, setSubscription] = useState<UserSubscription | null>(null);
+
+  // Plan Gate Modal
+  const [isPlanGateOpen, setIsPlanGateOpen] = useState(false);
+  const [planGateInfo, setPlanGateInfo] = useState<{
+    title?: string;
+    description?: string;
+    requiredPlan?: PlanTier;
+  }>({});
 
   // Brand Concept
   const [logoConcept, setLogoConcept] = useState<LogoConcept>(() => {
@@ -68,6 +82,18 @@ export function App() {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   };
 
+  // Fetch Subscription details
+  const fetchSubscription = useCallback(async () => {
+    try {
+      const sub = await api.getSubscription();
+      setSubscription(sub);
+      return sub;
+    } catch (err) {
+      console.error('Error fetching subscription:', err);
+      return null;
+    }
+  }, []);
+
   // Load Trips & Expenses from Server
   const loadUserTrips = async (preserveActiveId?: string | null) => {
     try {
@@ -90,7 +116,7 @@ export function App() {
     }
   };
 
-  // Check existing session on mount
+  // Check existing session and payment return on mount
   useEffect(() => {
     const initAuth = async () => {
       const token = getStoredToken();
@@ -99,6 +125,22 @@ export function App() {
           const user = await api.getMe();
           setCurrentUser(user);
           await loadUserTrips();
+          await fetchSubscription();
+
+          // Check if returning from Flow.cl payment
+          const urlParams = new URLSearchParams(window.location.search);
+          if (urlParams.get('payment') === 'flow_return') {
+            confetti({
+              particleCount: 150,
+              spread: 70,
+              origin: { y: 0.6 },
+              colors: ['#0ea5e9', '#38bdf8', '#38ef7d', '#f59e0b', '#ffffff']
+            });
+            showToast('¡Pago procesado con Flow.cl! Tu plan ha sido actualizado.', 'success');
+            // Clean URL
+            window.history.replaceState({}, document.title, window.location.pathname);
+            setCurrentTab('plans');
+          }
         } catch {
           removeStoredToken();
           setCurrentUser(null);
@@ -108,7 +150,7 @@ export function App() {
     };
 
     initAuth();
-  }, []);
+  }, [fetchSubscription, showToast]);
 
   // Reload expenses when activeTripId changes
   useEffect(() => {
@@ -122,6 +164,7 @@ export function App() {
   const handleLoginSuccess = async (user: User) => {
     setCurrentUser(user);
     await loadUserTrips();
+    await fetchSubscription();
   };
 
   const handleLogout = () => {
@@ -129,13 +172,33 @@ export function App() {
     setCurrentUser(null);
     setTrips([]);
     setExpenses([]);
+    setSubscription(null);
     setActiveTripId(null);
     showToast('Has cerrado sesión de forma segura.', 'info');
+  };
+
+  const openUpgradeGate = (featureTitle: string, featureDescription: string, requiredPlan: PlanTier = 'pro') => {
+    setPlanGateInfo({
+      title: featureTitle,
+      description: featureDescription,
+      requiredPlan,
+    });
+    setIsPlanGateOpen(true);
   };
 
   // Trip operations
   const handleSaveTrip = async (tripData: Partial<Trip>) => {
     if (!currentUser) return;
+
+    // Check client-side plan limits for new trips
+    if (!editingTrip && trips.length >= (subscription?.limits.maxActiveTrips ?? 1)) {
+      openUpgradeGate(
+        'Límite de 1 viaje en el Plan Gratis',
+        'Has alcanzado el límite de 1 viaje activo a la vez del plan Gratis. Actualiza a Pro o Premium para crear viajes ilimitados.',
+        'pro'
+      );
+      return;
+    }
 
     try {
       const saved = await api.saveTrip(tripData);
@@ -144,7 +207,15 @@ export function App() {
       await loadUserTrips(saved.id);
       showToast(editingTrip ? 'Viaje actualizado exitosamente.' : '¡Nuevo viaje creado y guardado en backend!', 'success');
     } catch (err: any) {
-      showToast(err.message || 'Error al guardar el viaje.', 'error');
+      if (err.data?.code === 'PLAN_LIMIT_EXCEEDED') {
+        openUpgradeGate(
+          'Límite de Viajes Alcanzado',
+          err.message || 'Actualiza tu plan para crear más viajes.',
+          err.data?.requiredPlan || 'pro'
+        );
+      } else {
+        showToast(err.message || 'Error al guardar el viaje.', 'error');
+      }
     }
   };
 
@@ -187,6 +258,17 @@ export function App() {
   const handleSaveExpense = async (expenseData: Partial<Expense>) => {
     if (!currentUser || !activeTripId) return;
 
+    // Check if splitting expense on free plan
+    const isSplitting = expenseData.splitBetween && expenseData.splitBetween.length > 1;
+    if (isSplitting && subscription && !subscription.limits.canSplitExpenses) {
+      openUpgradeGate(
+        'División de Gastos en Plan Pro / Premium',
+        'La división de gastos entre viajeros requiere el Plan Pro o Premium. Actualiza tu plan para dividir gastos y liquidar saldos automáticamente.',
+        'pro'
+      );
+      return;
+    }
+
     try {
       await api.saveExpense({
         ...expenseData,
@@ -198,7 +280,15 @@ export function App() {
       setExpenses(updated);
       showToast(editingExpense ? 'Gasto actualizado.' : 'Gasto registrado correctamente.', 'success');
     } catch (err: any) {
-      showToast(err.message || 'Error al guardar el gasto.', 'error');
+      if (err.data?.code === 'PLAN_LIMIT_EXCEEDED') {
+        openUpgradeGate(
+          'Función Requiere Actualización',
+          err.message || 'Esta acción no está permitida en tu plan actual.',
+          err.data?.requiredPlan || 'pro'
+        );
+      } else {
+        showToast(err.message || 'Error al guardar el gasto.', 'error');
+      }
     }
   };
 
@@ -341,6 +431,7 @@ export function App() {
             trips={trips}
             activeTripId={activeTripId}
             currentConcept={logoConcept}
+            userPlan={subscription?.plan || 'free'}
             onSelectTrip={(tripId) => {
               setActiveTripId(tripId);
             }}
@@ -349,6 +440,7 @@ export function App() {
               setIsTripModalOpen(true);
             }}
             onOpenBrandModal={() => setIsBrandModalOpen(true)}
+            onOpenPlans={() => setCurrentTab('plans')}
             onOpenGuide={() => setIsOnboardingOpen(true)}
             onLogout={handleLogout}
             onTriggerSecret={(msg) => showToast(msg, 'success')}
@@ -362,11 +454,28 @@ export function App() {
             pendingChecklistCount={
               activeTrip?.checklist ? activeTrip.checklist.filter(c => !c.isCompleted).length : 0
             }
+            userPlan={subscription?.plan || 'free'}
           />
 
           {/* Main Content Area */}
           <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
-            {!activeTrip && currentTab !== 'profile' ? (
+            {currentTab === 'plans' ? (
+              <PlansView
+                currentUser={currentUser}
+                subscription={subscription}
+                onRefreshSubscription={fetchSubscription}
+                onTriggerToast={showToast}
+              />
+            ) : currentTab === 'profile' ? (
+              <ProfileView
+                currentUser={currentUser}
+                userSubscription={subscription}
+                onOpenPlans={() => setCurrentTab('plans')}
+                onUpdateBaseCurrency={handleUpdateBaseCurrency}
+                onExportAllJSON={handleExportAllJSON}
+                onShowToast={showToast}
+              />
+            ) : !activeTrip ? (
               /* Empty state if user has no trips */
               <div className="glass-panel p-12 text-center rounded-3xl border border-slate-800 my-12 max-w-lg mx-auto shadow-2xl">
                 <div className="w-16 h-16 rounded-3xl bg-sky-500/20 text-sky-400 flex items-center justify-center mx-auto mb-4 border border-sky-500/30">
@@ -390,7 +499,7 @@ export function App() {
             ) : (
               /* Render active tab */
               <>
-                {currentTab === 'overview' && activeTrip && (
+                {currentTab === 'overview' && (
                   <OverviewView
                     trip={activeTrip}
                     expenses={expenses}
@@ -412,7 +521,7 @@ export function App() {
                   />
                 )}
 
-                {currentTab === 'expenses' && activeTrip && (
+                {currentTab === 'expenses' && (
                   <ExpensesView
                     trip={activeTrip}
                     expenses={expenses}
@@ -430,7 +539,7 @@ export function App() {
                   />
                 )}
 
-                {currentTab === 'budget' && activeTrip && (
+                {currentTab === 'budget' && (
                   <BudgetView
                     trip={activeTrip}
                     expenses={expenses}
@@ -440,11 +549,13 @@ export function App() {
                   />
                 )}
 
-                {currentTab === 'split' && activeTrip && (
+                {currentTab === 'split' && (
                   <SplitView
                     trip={activeTrip}
                     expenses={expenses}
                     currentUser={currentUser}
+                    userSubscription={subscription}
+                    onOpenPlans={() => setCurrentTab('plans')}
                     onUpdateTripMembers={handleUpdateTripMembers}
                     onOpenExpenseModal={() => {
                       setEditingExpense(null);
@@ -454,7 +565,7 @@ export function App() {
                   />
                 )}
 
-                {currentTab === 'planner' && activeTrip && (
+                {currentTab === 'planner' && (
                   <PlannerView
                     trip={activeTrip}
                     expenses={expenses}
@@ -464,20 +575,11 @@ export function App() {
                   />
                 )}
 
-                {currentTab === 'checklist' && activeTrip && (
+                {currentTab === 'checklist' && (
                   <ChecklistView
                     trip={activeTrip}
                     currentUser={currentUser}
                     onUpdateChecklist={handleUpdateChecklist}
-                    onShowToast={showToast}
-                  />
-                )}
-
-                {currentTab === 'profile' && (
-                  <ProfileView
-                    currentUser={currentUser}
-                    onUpdateBaseCurrency={handleUpdateBaseCurrency}
-                    onExportAllJSON={handleExportAllJSON}
                     onShowToast={showToast}
                   />
                 )}
@@ -486,6 +588,19 @@ export function App() {
           </main>
         </div>
       )}
+
+      {/* Plan Gate Modal */}
+      <PlanGateModal
+        isOpen={isPlanGateOpen}
+        onClose={() => setIsPlanGateOpen(false)}
+        onSelectPlan={(plan) => {
+          setIsPlanGateOpen(false);
+          setCurrentTab('plans');
+        }}
+        requiredPlan={planGateInfo.requiredPlan || 'pro'}
+        featureTitle={planGateInfo.title}
+        featureDescription={planGateInfo.description}
+      />
 
       {/* Trip Modal */}
       {isTripModalOpen && currentUser && (

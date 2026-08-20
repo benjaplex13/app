@@ -85,7 +85,64 @@ export interface EmailMessage {
   read: boolean;
 }
 
-export type TabType = 'overview' | 'expenses' | 'budget' | 'split' | 'planner' | 'checklist' | 'profile';
+export type TabType = 'overview' | 'expenses' | 'budget' | 'split' | 'planner' | 'checklist' | 'plans' | 'profile';
+
+export type PlanTier = 'free' | 'pro' | 'premium';
+export type BillingCycle = 'monthly' | 'annual';
+export type SubscriptionStatus = 'active' | 'canceled' | 'past_due' | 'expired';
+
+export interface PlanLimits {
+  maxActiveTrips: number;
+  maxCurrenciesPerTrip: number;
+  canSplitExpenses: boolean;
+  canExportReports: boolean;
+  canAutoSettleDebts: boolean;
+  canMonthlyEmailSummary: boolean;
+  canAiBudgetRecommendations: boolean;
+  hasAdvancedBudgetAlerts: boolean;
+}
+
+export interface PlanPricing {
+  id: PlanTier;
+  name: string;
+  badge?: string;
+  popular?: boolean;
+  priceMonthlyCLP: number;
+  priceAnnualCLP: number;
+  priceMonthlyFormatted: string;
+  priceAnnualFormatted: string;
+  description: string;
+  features: { text: string; included: boolean; premiumOnly?: boolean }[];
+  ctaLabel: string;
+}
+
+export interface UserSubscription {
+  id: string;
+  userId: string;
+  plan: PlanTier;
+  billingCycle: BillingCycle | null;
+  status: SubscriptionStatus;
+  provider: 'flow' | 'mercadopago' | null;
+  providerSubscriptionId?: string | null;
+  currentPeriodEnd?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  // Computed permission flags
+  limits: PlanLimits;
+  diagnostics?: {
+    flowConfigured: boolean;
+    flowSandbox: boolean;
+    flowEndpoint: string;
+  };
+}
+
+export interface CheckoutResponse {
+  url: string;
+  token: string;
+  redirectUrl: string;
+  commerceOrder: string;
+  flowOrderId?: string;
+}
 
 export interface ToastNotification {
   id: string;

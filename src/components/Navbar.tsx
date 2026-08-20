@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { Plus, HelpCircle, LogOut, Plane, Sparkles, Palette } from 'lucide-react';
+import { Plus, HelpCircle, LogOut, Plane, Sparkles, Palette, Crown } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { User, Trip } from '../types';
+import { User, Trip, PlanTier } from '../types';
 import { RumbioLogo, LogoConcept } from './RumbioLogo';
 
 interface NavbarProps {
@@ -9,9 +9,11 @@ interface NavbarProps {
   trips: Trip[];
   activeTripId: string | null;
   currentConcept?: LogoConcept;
+  userPlan?: PlanTier;
   onSelectTrip: (tripId: string) => void;
   onOpenNewTripModal: () => void;
   onOpenBrandModal?: () => void;
+  onOpenPlans?: () => void;
   onOpenGuide: () => void;
   onLogout: () => void;
   onTriggerSecret: (name: string) => void;
@@ -22,9 +24,11 @@ export const Navbar: React.FC<NavbarProps> = ({
   trips,
   activeTripId,
   currentConcept = 'growth-compass',
+  userPlan = 'free',
   onSelectTrip,
   onOpenNewTripModal,
   onOpenBrandModal,
+  onOpenPlans,
   onOpenGuide,
   onLogout,
   onTriggerSecret,
@@ -121,6 +125,31 @@ export const Navbar: React.FC<NavbarProps> = ({
               title="Logo & Marca"
             >
               <Palette className="w-4 h-4" />
+            </button>
+          )}
+
+          {/* Plan Badge Pill */}
+          {onOpenPlans && (
+            <button
+              id="navbar-plan-badge-btn"
+              onClick={onOpenPlans}
+              className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-[11px] font-extrabold border transition active:scale-95 ${
+                userPlan === 'premium'
+                  ? 'bg-amber-950/60 border-amber-500/40 text-amber-300 hover:bg-amber-900/60'
+                  : userPlan === 'pro'
+                  ? 'bg-cyan-950/60 border-cyan-500/40 text-cyan-300 hover:bg-cyan-900/60'
+                  : 'bg-gradient-to-r from-blue-600/30 to-cyan-500/30 border-cyan-500/30 text-cyan-300 hover:border-cyan-400'
+              }`}
+              title="Administrar Planes & Suscripción"
+            >
+              {userPlan === 'premium' ? (
+                <Crown className="w-3.5 h-3.5 text-amber-400" />
+              ) : userPlan === 'pro' ? (
+                <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+              ) : (
+                <Crown className="w-3.5 h-3.5 text-cyan-400" />
+              )}
+              <span className="hidden sm:inline uppercase">{userPlan === 'free' ? 'Plan Gratis' : `Plan ${userPlan}`}</span>
             </button>
           )}
 

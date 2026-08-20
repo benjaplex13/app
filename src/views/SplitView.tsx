@@ -11,15 +11,19 @@ import {
   PlusCircle,
   Receipt,
   Sparkles,
+  Crown,
+  Lock,
   Info
 } from 'lucide-react';
-import { Trip, Expense, User } from '../types';
+import { Trip, Expense, User, UserSubscription } from '../types';
 import { calculateSplitDebts, formatMoney, convertToHomeCurrency } from '../utils/finance';
 
 interface SplitViewProps {
   trip: Trip;
   expenses: Expense[];
   currentUser: User;
+  userSubscription?: UserSubscription | null;
+  onOpenPlans?: () => void;
   onUpdateTripMembers: (newMembers: string[]) => void;
   onOpenExpenseModal: () => void;
   onShowToast: (msg: string, type: 'success' | 'error' | 'warning' | 'info') => void;
@@ -29,12 +33,17 @@ export const SplitView: React.FC<SplitViewProps> = ({
   trip,
   expenses,
   currentUser,
+  userSubscription,
+  onOpenPlans,
   onUpdateTripMembers,
   onOpenExpenseModal,
   onShowToast,
 }) => {
   const [copied, setCopied] = useState(false);
   const [newMemberName, setNewMemberName] = useState('');
+
+  const canSplit = userSubscription?.limits.canSplitExpenses ?? true;
+  const canAutoSettle = userSubscription?.limits.canAutoSettleDebts ?? false;
 
   const { settlements, balances, totalSpent } = calculateSplitDebts(expenses, trip, currentUser.homeCurrency);
 
@@ -138,6 +147,38 @@ export const SplitView: React.FC<SplitViewProps> = ({
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
+      {/* Plan Gate Banner for Free users */}
+      {!canSplit && (
+        <div className="bg-gradient-to-r from-blue-950/80 via-slate-900/90 to-cyan-950/80 border border-cyan-500/40 rounded-3xl p-5 sm:p-6 shadow-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="flex items-start space-x-3.5">
+            <div className="w-10 h-10 rounded-2xl bg-cyan-500/20 border border-cyan-500/30 flex items-center justify-center shrink-0 text-cyan-300">
+              <Lock className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center space-x-2">
+                <span className="text-xs font-bold uppercase tracking-wider text-cyan-400 bg-cyan-950 px-2 py-0.5 rounded-full border border-cyan-500/30">
+                  Función Pro / Premium
+                </span>
+                <span className="text-sm font-bold text-white">División Grupal de Gastos</span>
+              </div>
+              <p className="text-xs text-slate-300 mt-1 leading-relaxed max-w-xl">
+                La división de cuentas y el cálculo inteligente de transferencias entre múltiples viajeros está disponible en los planes Pro y Premium.
+              </p>
+            </div>
+          </div>
+
+          {onOpenPlans && (
+            <button
+              onClick={onOpenPlans}
+              className="bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white font-bold text-xs px-5 py-2.5 rounded-xl shadow-lg shadow-cyan-500/20 flex items-center space-x-1.5 shrink-0 transition active:scale-95"
+            >
+              <Sparkles className="w-4 h-4" />
+              <span>Desbloquear Planes</span>
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Header */}
       <div className="bg-white/5 p-6 rounded-[32px] border border-white/5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>

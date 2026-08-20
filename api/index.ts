@@ -1,6 +1,7 @@
 import express, { Request, Response, NextFunction } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 import { Resend } from 'resend';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
@@ -46,6 +47,66 @@ export interface ExpenseDoc {
   splitBetween: string[];
   notes?: string;
   createdAt: string;
+}
+
+export type PlanTier = 'free' | 'pro' | 'premium';
+export type BillingCycle = 'monthly' | 'annual';
+export type SubscriptionStatus = 'active' | 'canceled' | 'past_due' | 'expired';
+
+export interface SubscriptionDoc {
+  id: string;
+  userId: string;
+  plan: PlanTier;
+  billingCycle: BillingCycle | null;
+  status: SubscriptionStatus;
+  provider: 'flow' | 'mercadopago' | null;
+  providerSubscriptionId?: string | null;
+  currentPeriodEnd?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SubscriptionOrderDoc {
+  id: string;
+  userId: string;
+  commerceOrder: string;
+  flowToken?: string | null;
+  plan: PlanTier;
+  billingCycle: BillingCycle;
+  amount: number;
+  currency: string;
+  status: 'pending' | 'paid' | 'rejected' | 'canceled';
+  flowOrderId?: string | null;
+  paymentData?: any;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UserSubscriptionResponse {
+  id: string;
+  userId: string;
+  plan: PlanTier;
+  billingCycle: BillingCycle | null;
+  status: SubscriptionStatus;
+  provider: 'flow' | 'mercadopago' | null;
+  providerSubscriptionId?: string | null;
+  currentPeriodEnd?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  limits: {
+    maxActiveTrips: number;
+    maxCurrenciesPerTrip: number;
+    canSplitExpenses: boolean;
+    canExportReports: boolean;
+    canAutoSettleDebts: boolean;
+    canReceiveMonthlyEmailSummary: boolean;
+    canSmartBudgetRecommendations: boolean;
+  };
+  diagnostics?: {
+    flowConfigured: boolean;
+    flowSandbox: boolean;
+    flowEndpoint: string;
+  };
 }
 
 const JWT_SECRET = process.env.JWT_SECRET || 'rumbio_super_secure_jwt_secret_2026_travel_finance';
@@ -470,6 +531,243 @@ export function verifyAuth(req: AuthenticatedRequest, res: Response, next: NextF
 }
 
 // ============================================================================
+// FLOW.CL INTEGRATION (Payment Gateway & Recurring Subscriptions for Chile)
+// ============================================================================
+export function getFlowConfig() {
+  const apiKey = (process.env.FLOW_API_KEY || '').trim();
+  const secretKey = (process.env.FLOW_SECRET_KEY || '').trim();
+  const isSandbox = process.env.FLOW_SANDBOX !== 'false';
+  const endpoint = isSandbox ? 'https://sandbox.flow.cl/api' : 'https://www.flow.cl/api';
+  const isConfigured = !!(apiKey.length > 0 && secretKey.length > 0);
+
+  return {
+    apiKey,
+    secretKey,
+    isSandbox,
+    endpoint,
+    isConfigured,
+  };
+}
+
+export function signFlowParams(params: Record<string, any>, secretKey: string): string {
+  // 1. Order keys alphabetically (ASCII) and exclude 's' and empty values
+  const sortedKeys = Object.keys(params)
+    .filter((k) => k !== 's' && params[k] !== undefined && params[k] !== null)
+    .sort();
+
+  // 2. Concatenate keys and values without delimiters
+  let toSign = '';
+  for (const k of sortedKeys) {
+    toSign += `${k}${params[k]}`;
+  }
+
+  // 3. Generate HMAC-SHA256 digest in hex format
+  return crypto.createHmac('sha256', secretKey).update(toSign).digest('hex');
+}
+
+export async function createFlowPayment(orderData: {
+  commerceOrder: string;
+  subject: string;
+  currency: string;
+  amount: number;
+  email: string;
+  urlConfirmation: string;
+  urlReturn: string;
+  optional?: string;
+}): Promise<{ url: string; token: string; flowOrder?: number }> {
+  const config = getFlowConfig();
+  if (!config.isConfigured) {
+    throw new Error(
+      'Flow.cl no está configurado. Por favor define las variables de entorno FLOW_API_KEY y FLOW_SECRET_KEY en Vercel.'
+    );
+  }
+
+  const params: Record<string, any> = {
+    apiKey: config.apiKey,
+    commerceOrder: orderData.commerceOrder,
+    subject: orderData.subject,
+    currency: orderData.currency,
+    amount: orderData.amount,
+    email: orderData.email,
+    urlConfirmation: orderData.urlConfirmation,
+    urlReturn: orderData.urlReturn,
+  };
+
+  if (orderData.optional) {
+    params.optional = orderData.optional;
+  }
+
+  // Calculate signature
+  params.s = signFlowParams(params, config.secretKey);
+
+  const formBody = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    formBody.append(key, String(value));
+  }
+
+  const response = await fetch(`${config.endpoint}/payment/create`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: formBody.toString(),
+  });
+
+  const data: any = await response.json().catch(() => ({}));
+
+  if (!response.ok || !data.token || !data.url) {
+    const errorMsg = data.message || `Error de Flow.cl (${response.status}): ${JSON.stringify(data)}`;
+    throw new Error(errorMsg);
+  }
+
+  return {
+    url: data.url,
+    token: data.token,
+    flowOrder: data.flowOrder,
+  };
+}
+
+export async function getFlowPaymentStatus(token: string): Promise<any> {
+  const config = getFlowConfig();
+  if (!config.isConfigured) {
+    throw new Error('Flow.cl no está configurado (FLOW_API_KEY / FLOW_SECRET_KEY faltantes).');
+  }
+
+  const params: Record<string, any> = {
+    apiKey: config.apiKey,
+    token: token.trim(),
+  };
+
+  params.s = signFlowParams(params, config.secretKey);
+
+  const query = new URLSearchParams(params).toString();
+  const response = await fetch(`${config.endpoint}/payment/getStatus?${query}`, {
+    method: 'GET',
+  });
+
+  const data: any = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    const errorMsg = data.message || `Error al consultar estado en Flow (${response.status})`;
+    throw new Error(errorMsg);
+  }
+
+  return data;
+}
+
+// ============================================================================
+// SUBSCRIPTION GETTER & LIMITS CALCULATOR
+// ============================================================================
+export async function getUserSubscription(userId: string): Promise<UserSubscriptionResponse> {
+  const supabase = getSupabase();
+  const flowConfig = getFlowConfig();
+
+  // Try to find existing subscription row
+  const { data: subRow } = await supabase
+    .from('subscriptions')
+    .select('*')
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  let sub: SubscriptionDoc;
+
+  if (!subRow) {
+    // Auto-create initial default Free subscription for user
+    const newSubId = 'sub_' + userId;
+    const nowIso = new Date().toISOString();
+    const defaultPayload = {
+      id: newSubId,
+      user_id: userId,
+      plan: 'free',
+      billing_cycle: null,
+      status: 'active',
+      provider: null,
+      provider_subscription_id: null,
+      current_period_end: null,
+      created_at: nowIso,
+      updated_at: nowIso,
+    };
+
+    const { data: createdRow } = await supabase
+      .from('subscriptions')
+      .upsert(defaultPayload, { onConflict: 'user_id' })
+      .select()
+      .maybeSingle();
+
+    sub = {
+      id: createdRow?.id || newSubId,
+      userId,
+      plan: (createdRow?.plan as PlanTier) || 'free',
+      billingCycle: (createdRow?.billing_cycle as BillingCycle) || null,
+      status: (createdRow?.status as SubscriptionStatus) || 'active',
+      provider: createdRow?.provider || null,
+      providerSubscriptionId: createdRow?.provider_subscription_id,
+      currentPeriodEnd: createdRow?.current_period_end,
+      createdAt: createdRow?.created_at || nowIso,
+      updatedAt: createdRow?.updated_at || nowIso,
+    };
+  } else {
+    sub = {
+      id: subRow.id,
+      userId: subRow.user_id,
+      plan: subRow.plan as PlanTier,
+      billingCycle: subRow.billing_cycle as BillingCycle,
+      status: subRow.status as SubscriptionStatus,
+      provider: subRow.provider,
+      providerSubscriptionId: subRow.provider_subscription_id,
+      currentPeriodEnd: subRow.current_period_end,
+      createdAt: subRow.created_at,
+      updatedAt: subRow.updated_at,
+    };
+  }
+
+  // Check if paid plan has expired
+  let effectivePlan = sub.plan;
+  let effectiveStatus = sub.status;
+
+  if (sub.plan !== 'free' && sub.currentPeriodEnd) {
+    const periodEndTime = new Date(sub.currentPeriodEnd).getTime();
+    if (Date.now() > periodEndTime) {
+      effectivePlan = 'free';
+      effectiveStatus = 'expired';
+      Promise.resolve(
+        supabase
+          .from('subscriptions')
+          .update({ status: 'expired', updated_at: new Date().toISOString() })
+          .eq('id', sub.id)
+      ).catch(() => {});
+    }
+  }
+
+  return {
+    id: sub.id,
+    userId: sub.userId,
+    plan: effectivePlan,
+    billingCycle: sub.billingCycle,
+    status: effectiveStatus,
+    provider: sub.provider,
+    providerSubscriptionId: sub.providerSubscriptionId,
+    currentPeriodEnd: sub.currentPeriodEnd,
+    createdAt: sub.createdAt,
+    updatedAt: sub.updatedAt,
+    limits: {
+      maxActiveTrips: effectivePlan === 'free' ? 1 : 999999,
+      maxCurrenciesPerTrip: effectivePlan === 'free' ? 2 : 999999,
+      canSplitExpenses: effectivePlan !== 'free',
+      canExportReports: effectivePlan !== 'free',
+      canAutoSettleDebts: effectivePlan === 'premium',
+      canReceiveMonthlyEmailSummary: effectivePlan === 'premium',
+      canSmartBudgetRecommendations: effectivePlan === 'premium',
+    },
+    diagnostics: {
+      flowConfigured: flowConfig.isConfigured,
+      flowSandbox: flowConfig.isSandbox,
+      flowEndpoint: flowConfig.endpoint,
+    },
+  };
+}
+
+// ============================================================================
 // DEMO OTP CONFIG HELPER
 // ============================================================================
 export function getDemoOtpConfig() {
@@ -486,6 +784,7 @@ export function getDemoOtpConfig() {
 // ============================================================================
 export const app = express();
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 // ============================================================================
 // API ROUTES
@@ -519,12 +818,21 @@ app.get('/api/health', async (req: Request, res: Response) => {
     supabaseStatus = `not configured: ${err.message}`;
   }
 
+  const flowConfig = getFlowConfig();
+
   res.json({
     status: 'ok',
     service: 'Rumbio Production Backend Engine',
     database: supabaseStatus,
     supabaseDiagnostics,
     resendDiagnostics,
+    flowDiagnostics: {
+      configured: flowConfig.isConfigured,
+      sandbox: flowConfig.isSandbox,
+      endpoint: flowConfig.endpoint,
+      apiKeyPresent: !!flowConfig.apiKey,
+      secretKeyPresent: !!flowConfig.secretKey,
+    },
     demoOtpActive: demoConfig.demoOtpActive,
     demoOtpCode: demoConfig.demoOtpCode,
     realEmailConfigured: resendDiagnostics.clientInitialized,
@@ -1016,6 +1324,253 @@ app.put('/api/auth/me', verifyAuth, async (req: AuthenticatedRequest, res: Respo
 });
 
 // ============================================================================
+// SUBSCRIPTION & PLAN MANAGEMENT ROUTES (FLOW.CL)
+// ============================================================================
+
+// 9a. Subscriptions: Get current user subscription status & computed limits
+app.get('/api/subscriptions/me', verifyAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const subscription = await getUserSubscription(userId);
+    res.json(subscription);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Error al obtener información de suscripción.' });
+  }
+});
+
+// 9b. Subscriptions: Create Flow.cl payment checkout
+app.post('/api/subscriptions/create-checkout', verifyAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const userEmail = req.user!.email;
+    const { plan, billingCycle } = req.body;
+
+    if (!plan || (plan !== 'pro' && plan !== 'premium')) {
+      return res.status(400).json({ error: 'Plan inválido. Debe ser "pro" o "premium".' });
+    }
+
+    if (!billingCycle || (billingCycle !== 'monthly' && billingCycle !== 'annual')) {
+      return res.status(400).json({ error: 'Ciclo de facturación inválido. Debe ser "monthly" o "annual".' });
+    }
+
+    // Pricing in CLP according to specifications:
+    // Pro: $2.990 CLP/mes o $29.990 CLP/año
+    // Premium: $5.990 CLP/mes o $59.990 CLP/año
+    let amount = 0;
+    let subject = '';
+
+    if (plan === 'pro') {
+      amount = billingCycle === 'annual' ? 29990 : 2990;
+      subject = `Rumbio Pro (${billingCycle === 'annual' ? 'Anual' : 'Mensual'})`;
+    } else {
+      amount = billingCycle === 'annual' ? 59990 : 5990;
+      subject = `Rumbio Premium (${billingCycle === 'annual' ? 'Anual' : 'Mensual'})`;
+    }
+
+    const flowConfig = getFlowConfig();
+    if (!flowConfig.isConfigured) {
+      return res.status(503).json({
+        error:
+          'La pasarela de pago Flow.cl no está configurada aún en el servidor. Por favor define FLOW_API_KEY y FLOW_SECRET_KEY en las variables de entorno de Vercel.',
+        code: 'FLOW_NOT_CONFIGURED',
+      });
+    }
+
+    const supabase = getSupabase();
+    const appUrl = (process.env.APP_URL || `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '');
+    const commerceOrder = `RMB_${plan.toUpperCase()}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const urlConfirmation = `${appUrl}/api/subscriptions/webhook`;
+    const urlReturn = `${appUrl}/?payment=flow_return&order=${commerceOrder}`;
+
+    const optionalData = JSON.stringify({
+      userId,
+      email: userEmail,
+      plan,
+      billingCycle,
+      amount,
+    });
+
+    const flowPayment = await createFlowPayment({
+      commerceOrder,
+      subject,
+      currency: 'CLP',
+      amount,
+      email: userEmail,
+      urlConfirmation,
+      urlReturn,
+      optional: optionalData,
+    });
+
+    // Record order in database
+    await supabase.from('subscription_orders').insert({
+      id: 'ord_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+      user_id: userId,
+      commerce_order: commerceOrder,
+      flow_token: flowPayment.token,
+      plan,
+      billing_cycle: billingCycle,
+      amount,
+      currency: 'CLP',
+      status: 'pending',
+      flow_order_id: flowPayment.flowOrder ? String(flowPayment.flowOrder) : null,
+      payment_data: {
+        subject,
+        urlReturn,
+        urlConfirmation,
+      },
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+
+    res.json({
+      url: flowPayment.url,
+      token: flowPayment.token,
+      redirectUrl: `${flowPayment.url}?token=${flowPayment.token}`,
+      commerceOrder,
+      flowOrderId: flowPayment.flowOrder,
+    });
+  } catch (err: any) {
+    console.error('Create checkout error:', err);
+    res.status(500).json({ error: err.message || 'Error al generar checkout de suscripción en Flow.' });
+  }
+});
+
+// 9c. Subscriptions: Flow.cl Webhook / Confirmation Endpoint (Public)
+app.post('/api/subscriptions/webhook', async (req: Request, res: Response) => {
+  try {
+    const token = req.body?.token || req.query?.token;
+    if (!token) {
+      return res.status(400).json({ error: 'Token no proporcionado en la confirmación de Flow.' });
+    }
+
+    const flowStatus = await getFlowPaymentStatus(String(token));
+    const { commerceOrder, status, flowOrder, optional } = flowStatus;
+
+    // Status: 1 = Pendiente, 2 = Pagada, 3 = Rechazada, 4 = Anulada
+    const supabase = getSupabase();
+
+    let parsedOptional: any = {};
+    if (optional) {
+      try {
+        parsedOptional = typeof optional === 'string' ? JSON.parse(optional) : optional;
+      } catch {}
+    }
+
+    // Lookup corresponding order
+    const { data: orderRow } = await supabase
+      .from('subscription_orders')
+      .select('*')
+      .eq('commerce_order', commerceOrder)
+      .maybeSingle();
+
+    const userId = orderRow?.user_id || parsedOptional?.userId;
+    const plan = (orderRow?.plan || parsedOptional?.plan || 'pro') as PlanTier;
+    const billingCycle = (orderRow?.billing_cycle || parsedOptional?.billingCycle || 'monthly') as BillingCycle;
+
+    if (!userId) {
+      console.warn('[Flow Webhook] Warning: Could not identify userId for commerce order', commerceOrder);
+      return res.status(200).json({ message: 'Webhook procesado (usuario no vinculado)' });
+    }
+
+    if (status === 2) {
+      // Payment Successful (Pagada)
+      const durationDays = billingCycle === 'annual' ? 365 : 30;
+      const periodEnd = new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000).toISOString();
+
+      // Update order record
+      if (orderRow) {
+        await supabase
+          .from('subscription_orders')
+          .update({
+            status: 'paid',
+            flow_order_id: String(flowOrder),
+            payment_data: flowStatus,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', orderRow.id);
+      }
+
+      // Upsert subscription table record
+      await supabase
+        .from('subscriptions')
+        .upsert(
+          {
+            id: 'sub_' + userId,
+            user_id: userId,
+            plan,
+            billing_cycle: billingCycle,
+            status: 'active',
+            provider: 'flow',
+            provider_subscription_id: String(flowOrder),
+            current_period_end: periodEnd,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'user_id' }
+        );
+
+      console.log(`[Flow Webhook] Suscripción activada para usuario ${userId}: Plan ${plan} (${billingCycle})`);
+      return res.status(200).json({ status: 'ok', message: 'Suscripción activada exitosamente.' });
+    } else if (status === 3 || status === 4) {
+      // Payment rejected or canceled
+      if (orderRow) {
+        await supabase
+          .from('subscription_orders')
+          .update({
+            status: status === 3 ? 'rejected' : 'canceled',
+            payment_data: flowStatus,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', orderRow.id);
+      }
+      return res.status(200).json({ status: 'ok', message: 'Estado de orden registrado.' });
+    }
+
+    res.status(200).json({ status: 'ok' });
+  } catch (err: any) {
+    console.error('[Flow Webhook Error]', err);
+    res.status(500).json({ error: err.message || 'Error al procesar webhook de Flow.' });
+  }
+});
+
+// 9d. Subscriptions: Cancel active paid subscription
+app.post('/api/subscriptions/cancel', verifyAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const supabase = getSupabase();
+
+    const { data: subRow } = await supabase
+      .from('subscriptions')
+      .select('*')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (!subRow || subRow.plan === 'free') {
+      return res.status(400).json({ error: 'No tienes una suscripción de pago activa para cancelar.' });
+    }
+
+    // Update status to canceled, preserving current_period_end
+    const { error: updateError } = await supabase
+      .from('subscriptions')
+      .update({
+        status: 'canceled',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('user_id', userId);
+
+    if (updateError) throw new Error(updateError.message);
+
+    const subscription = await getUserSubscription(userId);
+    res.json({
+      message:
+        'Suscripción cancelada. Mantendrás acceso a las funciones de tu plan hasta el final de tu período contratado.',
+      subscription,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Error al cancelar suscripción.' });
+  }
+});
+
+// ============================================================================
 // STRICT USER DATA ISOLATION ROUTES (TRIPS & EXPENSES IN SUPABASE)
 // Enforces `WHERE user_id = req.user.id` on every query.
 // ============================================================================
@@ -1069,12 +1624,13 @@ app.get('/api/trips/:id', verifyAuth, async (req: AuthenticatedRequest, res: Res
   }
 });
 
-// 11. Trips: Create or Update trip (enforces user_id = req.user.id)
+// 11. Trips: Create or Update trip (enforces user_id = req.user.id & plan limits)
 app.post('/api/trips', verifyAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const supabase = getSupabase();
     const tripData = req.body;
     const userId = req.user!.id;
+    const userSub = await getUserSubscription(userId);
 
     if (tripData.id) {
       // Check ownership
@@ -1113,6 +1669,22 @@ app.post('/api/trips', verifyAuth, async (req: AuthenticatedRequest, res: Respon
         if (updateError) throw new Error(updateError.message);
         return res.json(mapTripFromDb(updatedRow));
       }
+    }
+
+    // Check Plan Limits for creating new trip
+    const { count: currentTripsCount } = await supabase
+      .from('trips')
+      .select('*', { count: 'exact', head: true })
+      .eq('user_id', userId);
+
+    if ((currentTripsCount || 0) >= userSub.limits.maxActiveTrips) {
+      return res.status(403).json({
+        error:
+          'Límite del plan Gratis alcanzado: Puedes tener 1 viaje activo a la vez. Actualiza a Pro o Premium para crear viajes ilimitados.',
+        code: 'PLAN_LIMIT_EXCEEDED',
+        feature: 'unlimited_trips',
+        requiredPlan: 'pro',
+      });
     }
 
     // Insert brand new trip
@@ -1210,6 +1782,7 @@ app.post('/api/expenses', verifyAuth, async (req: AuthenticatedRequest, res: Res
     const supabase = getSupabase();
     const expData = req.body;
     const userId = req.user!.id;
+    const userSub = await getUserSubscription(userId);
 
     // Verify trip belongs to user
     const { data: targetTrip } = await supabase
@@ -1221,6 +1794,20 @@ app.post('/api/expenses', verifyAuth, async (req: AuthenticatedRequest, res: Res
 
     if (!targetTrip) {
       return res.status(403).json({ error: 'El viaje especificado no existe o no te pertenece.' });
+    }
+
+    // Check Plan Limits for split expenses
+    const splitList =
+      Array.isArray(expData.splitBetween) && expData.splitBetween.length > 0 ? expData.splitBetween : ['Yo'];
+    const isSplitGroup = splitList.length > 1 || (expData.paidBy && expData.paidBy !== 'Yo');
+
+    if (isSplitGroup && !userSub.limits.canSplitExpenses) {
+      return res.status(403).json({
+        error: 'La división de gastos entre viajeros está disponible en los planes Pro y Premium.',
+        code: 'PLAN_LIMIT_EXCEEDED',
+        feature: 'split_expenses',
+        requiredPlan: 'pro',
+      });
     }
 
     if (expData.id) {
@@ -1242,7 +1829,7 @@ app.post('/api/expenses', verifyAuth, async (req: AuthenticatedRequest, res: Res
           category: expData.category || existingExp.category,
           date: expData.date || existingExp.date,
           paid_by: expData.paidBy || existingExp.paid_by,
-          split_between: Array.isArray(expData.splitBetween) ? expData.splitBetween : existingExp.split_between,
+          split_between: splitList,
           notes: expData.notes !== undefined ? expData.notes : existingExp.notes,
         };
 
@@ -1271,8 +1858,7 @@ app.post('/api/expenses', verifyAuth, async (req: AuthenticatedRequest, res: Res
       category: expData.category || 'Comida',
       date: expData.date || new Date().toISOString().split('T')[0],
       paid_by: expData.paidBy || 'Yo',
-      split_between:
-        Array.isArray(expData.splitBetween) && expData.splitBetween.length > 0 ? expData.splitBetween : ['Yo'],
+      split_between: splitList,
       notes: expData.notes || '',
       created_at: expData.createdAt || new Date().toISOString(),
     };

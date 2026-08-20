@@ -2,17 +2,54 @@
 <html lang="es">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Rumbio | Finanzas y Presupuesto de Viajes</title>
-    <meta name="description" content="Gestiona tus viajes, presupuestos, gastos multidivisa y división de cuentas con Rumbio." />
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' fill='none'%3E%3Ccircle cx='50' cy='50' r='44' stroke='%232563EB' stroke-width='8' stroke-dasharray='210 20' stroke-linecap='round'/%3E%3Ccircle cx='16' cy='50' r='4' fill='%2306B6D4'/%3E%3Ccircle cx='50' cy='84' r='4' fill='%2306B6D4'/%3E%3Cpath d='M 50 50 L 29 63 L 73 27 Z' fill='%232563EB'/%3E%3Cpath d='M 50 50 L 73 27 L 63 71 Z' fill='%2306B6D4'/%3E%3Ccircle cx='50' cy='50' r='6' fill='%23FFFFFF'/%3E%3C/svg%3E" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Rumbio — Finanzas inteligentes para tus viajes</title>
+    <meta name="description" content="Controla tus gastos, presupuestos y divisas mientras viajas con Rumbio." />
+
+    <!-- PWA Web App Manifest -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+
+    <!-- Favicon & Standard Icons -->
+    <link rel="icon" type="image/svg+xml" href="/icons/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="64x64" href="/icons/favicon.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
+
+    <!-- Apple iOS Safari & Home Screen Meta Tags -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Rumbio" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png" />
+    <link rel="apple-touch-startup-image" href="/splash/splash-dark.png" />
+
+    <!-- Android & Chrome Theme Color -->
+    <meta name="theme-color" content="#0A2F5E" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#050811" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#0A2F5E" />
+
+    <!-- Windows & Tile Settings -->
+    <meta name="application-name" content="Rumbio" />
+    <meta name="msapplication-TileColor" content="#0A2F5E" />
+    <meta name="msapplication-TileImage" content="/icons/icon-144.png" />
+
+    <!-- Open Graph / Facebook / WhatsApp -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Rumbio — Finanzas inteligentes para tus viajes" />
+    <meta property="og:description" content="Controla tus gastos, presupuestos y divisas mientras viajas con Rumbio." />
+    <meta property="og:image" content="/branding/rumbio-logo-3d.png" />
+
+    <!-- Twitter Cards -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Rumbio — Finanzas inteligentes para tus viajes" />
+    <meta name="twitter:description" content="Controla tus gastos, presupuestos y divisas mientras viajas con Rumbio." />
+    <meta name="twitter:image" content="/branding/rumbio-logo-3d.png" />
+
+    <!-- Typography -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Outfit:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   </head>
-  <body class="bg-slate-950 text-slate-100 font-sans antialiased selection:bg-sky-500 selection:text-white min-h-screen">
+  <body class="bg-slate-950 text-slate-100 font-sans antialiased selection:bg-cyan-500 selection:text-white min-h-screen">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
-
