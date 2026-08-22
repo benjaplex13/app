@@ -271,6 +271,109 @@ export const api = {
     });
   },
 
+  // ==========================================
+  // 5. PREMIUM EXCLUSIVE API METHODS (Block 2)
+  // ==========================================
+
+  // 5a. Open Banking / Aggregator Config & Status
+  async getBankingConfig() {
+    return apiFetch<{
+      isConfigured: boolean;
+      preferredProvider: 'fintoc' | 'belvo';
+      fintoc: { isConfigured: boolean; publicKey: string | null; region: string };
+      belvo: { isConfigured: boolean; region: string };
+      supportedBanks: { id: string; name: string; country: string; provider: string }[];
+      requirements: {
+        instructions: string;
+        envVarsNeeded: { name: string; description: string; optional: boolean }[];
+      };
+    }>('/api/banking/config');
+  },
+
+  // 5b. Bank Movements Query
+  async getBankingMovements() {
+    return apiFetch<{
+      isConfigured: boolean;
+      provider?: string;
+      message?: string;
+      accountsCount?: number;
+      movements: any[];
+      config?: any;
+    }>('/api/banking/movements');
+  },
+
+  // 5c. Import Bank Movements as Trip Expenses
+  async importBankingMovementsToExpenses(tripId: string, movements: any[]) {
+    return apiFetch<{
+      success: boolean;
+      importedCount: number;
+      expenses: Expense[];
+    }>('/api/banking/import-to-expenses', {
+      method: 'POST',
+      body: JSON.stringify({ tripId, movements }),
+    });
+  },
+
+  // 5d. Proactive AI Financial Advisor (Velocity / Burn-rate Pacing)
+  async getProactiveAdvice(tripId?: string, trip?: Trip, expenses?: Expense[]) {
+    return apiFetch<{
+      success: boolean;
+      tripId: string;
+      metrics: {
+        totalDays: number;
+        daysElapsed: number;
+        daysRemaining: number;
+        budget: number;
+        totalSpent: number;
+        remainingBudget: number;
+        plannedDailyBudget: number;
+        currentBurnRate: number;
+        safeDailyBudgetRemaining: number;
+        projectedTotalSpend: number;
+        projectedDeficitSurplus: number;
+        pacingStatus: 'optimal' | 'on_track' | 'warning' | 'critical';
+        currency: CurrencyCode;
+      };
+      adviceItems: {
+        id: string;
+        type: 'alert' | 'warning' | 'tip' | 'positive';
+        title: string;
+        message: string;
+        impact: string;
+        suggestedAction: string;
+      }[];
+      generatedAt: string;
+    }>('/api/ai/proactive-advice', {
+      method: 'POST',
+      body: JSON.stringify({ tripId, trip, expenses }),
+    });
+  },
+
+  // 5e. Cross-Trip Budget Projection & Historical Benchmarking
+  async getCrossTripBudgetProjection(payload: {
+    destination: string;
+    durationDays?: number;
+    travelStyle?: 'budget' | 'balanced' | 'comfort' | 'luxury';
+    targetCurrency?: CurrencyCode;
+  }) {
+    return apiFetch<{
+      success: boolean;
+      destination: string;
+      durationDays: number;
+      travelStyle: string;
+      targetCurrency: CurrencyCode;
+      historicalTripsAnalyzed: number;
+      historicalExpensesAnalyzed: number;
+      projectedTotal: number;
+      projectedDailyAverage: number;
+      categories: { category: string; estimatedAmount: number; percentage: number }[];
+      confidenceScore: number;
+    }>('/api/analytics/budget-projection', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
   // Generic request helpers
   async get<T>(endpoint: string) {
     return apiFetch<T>(endpoint, { method: 'GET' });

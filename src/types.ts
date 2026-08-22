@@ -83,6 +83,22 @@ export interface Expense {
   exchangeRateDate?: string;
   receiptImageUrl?: string;
   isOfflinePending?: boolean;
+  // Premium enhancements (Business mode & Open Banking)
+  isTaxDeductible?: boolean;
+  invoiceNumber?: string;
+  merchantName?: string;
+  bankTransactionId?: string;
+}
+
+export interface BusinessTripMetadata {
+  companyName: string;
+  employeeName: string;
+  costCenter?: string;
+  taxId?: string; // RUT o RFC o Tax ID
+  projectCode?: string;
+  approverName?: string;
+  department?: string;
+  travelPurpose?: string;
 }
 
 export interface PlanItem {
@@ -115,12 +131,95 @@ export interface Trip {
   plans?: PlanItem[];
   members: string[]; // List of people traveling (e.g., ['Yo', 'Carlos', 'Valeria'])
   createdAt: string;
+  // Premium business travel mode
+  isBusinessTrip?: boolean;
+  businessMetadata?: BusinessTripMetadata;
 }
 
 export interface DebtSettlement {
   from: string;
   to: string;
   amount: number;
+  // Multi-currency details
+  originalCurrencies?: { currency: CurrencyCode; amount: number }[];
+  targetCurrency?: CurrencyCode;
+  exchangeRateApplied?: number;
+}
+
+export interface MultiCurrencySettlementOption {
+  displayCurrency: CurrencyCode;
+  currencySymbol: string;
+  settlements: DebtSettlement[];
+  memberBalances: Record<string, { net: number; paid: number; consumed: number }>;
+  rateUsed: number;
+}
+
+export interface BankMovement {
+  id: string;
+  date: string;
+  description: string;
+  amount: number;
+  currency: CurrencyCode;
+  categorySuggestion: ExpenseCategory;
+  bankName: string;
+  accountType: string;
+  referenceId?: string;
+}
+
+export interface BankingConfigStatus {
+  fintocConfigured: boolean;
+  belvoConfigured: boolean;
+  supportedBanks: string[];
+  activeProvider: 'fintoc' | 'belvo' | 'none';
+  instructions: {
+    title: string;
+    description: string;
+    keysNeeded: string[];
+  };
+}
+
+export interface CrossTripComparisonItem {
+  id: string;
+  name: string;
+  destination: string;
+  durationDays: number;
+  totalBudget: number;
+  totalSpent: number;
+  dailyBurnRate: number;
+  currency: CurrencyCode;
+  categories: Record<string, number>;
+  percentBudgetUsed: number;
+}
+
+export interface BudgetProjectionResult {
+  destination: string;
+  durationDays: number;
+  travelStyle: 'economico' | 'moderado' | 'premium';
+  suggestedTotalBudget: number;
+  suggestedDailyBurnRate: number;
+  currency: CurrencyCode;
+  categoryBreakdown: { category: ExpenseCategory; amount: number; percentage: number }[];
+  historicalBasisCount: number;
+  aiExplanation?: string;
+}
+
+export interface ProactiveAdvice {
+  id: string;
+  type: 'velocity_alert' | 'pacing_warning' | 'category_imbalance' | 'savings_tip' | 'positive_pacing';
+  title: string;
+  message: string;
+  actionableRecommendation: string;
+  urgency: 'high' | 'medium' | 'low';
+  metrics?: {
+    daysElapsed: number;
+    daysTotal: number;
+    daysRemaining: number;
+    actualDailyBurnRate: number;
+    targetDailyBudget: number;
+    burnRateVariancePercent: number;
+    projectedTotalSpend: number;
+  };
+  createdAt: string;
 }
 
 export interface EmailMessage {
@@ -162,6 +261,12 @@ export interface PlanLimits {
   canRealTimeFx: boolean;
   canBudgetAlerts: boolean;
   canPwaWidget: boolean;
+  // 5 New Premium exclusive capabilities
+  canBankSync: boolean;
+  canMultiCurrencyDebtSettlement: boolean;
+  canCrossTripAnalytics: boolean;
+  canBusinessTripMode: boolean;
+  canProactiveAiAdvisor: boolean;
 }
 
 export interface OcrReceiptResult {

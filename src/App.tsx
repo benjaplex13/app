@@ -34,9 +34,14 @@ import { LogoBrandModal } from './components/LogoBrandModal';
 import { PlanGateModal } from './components/PlanGateModal';
 import { CheckoutModal } from './components/CheckoutModal';
 import { ExportModal } from './components/ExportModal';
+import { BankSyncModal } from './components/BankSyncModal';
+import { BusinessTripModal } from './components/BusinessTripModal';
+import { CrossTripAnalyticsModal } from './components/CrossTripAnalyticsModal';
 import { AiChatFloatingWidget } from './components/AiChatFloatingWidget';
 import { LogoConcept } from './components/RumbioLogo';
 import { downloadStructuredJSON } from './utils/exportEngine';
+import { OfflineSyncBanner } from './components/OfflineSyncBanner';
+import { PwaCompactWidget } from './components/PwaCompactWidget';
 import { Compass, Plus, Loader2 } from 'lucide-react';
 
 export function App() {
@@ -72,6 +77,11 @@ export function App() {
   const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false);
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
   const [isOnboardingOpen, setIsOnboardingOpen] = useState(false);
+
+  // Premium Feature Modals (Block 2)
+  const [isBankSyncModalOpen, setIsBankSyncModalOpen] = useState(false);
+  const [isBusinessTripModalOpen, setIsBusinessTripModalOpen] = useState(false);
+  const [isAnalyticsModalOpen, setIsAnalyticsModalOpen] = useState(false);
 
   // Notifications
   const [toasts, setToasts] = useState<ToastNotification[]>([]);
@@ -186,12 +196,24 @@ export function App() {
     showToast('Has cerrado sesión de forma segura.', 'info');
   };
 
-  const openUpgradeGate = (featureTitle: string, featureDescription: string, requiredPlan: PlanTier = 'pro') => {
-    setPlanGateInfo({
-      title: featureTitle,
-      description: featureDescription,
-      requiredPlan,
-    });
+  const openUpgradeGate = (
+    featureTitleOrOpts: string | { title?: string; description?: string; requiredPlan?: PlanTier },
+    featureDescription: string = '',
+    requiredPlan: PlanTier = 'pro'
+  ) => {
+    if (typeof featureTitleOrOpts === 'object') {
+      setPlanGateInfo({
+        title: featureTitleOrOpts.title || 'Función Avanzada',
+        description: featureTitleOrOpts.description || 'Actualiza tu plan para desbloquear esta herramienta exclusiva.',
+        requiredPlan: featureTitleOrOpts.requiredPlan || 'pro',
+      });
+    } else {
+      setPlanGateInfo({
+        title: featureTitleOrOpts,
+        description: featureDescription,
+        requiredPlan,
+      });
+    }
     setIsPlanGateOpen(true);
   };
 
@@ -446,6 +468,16 @@ export function App() {
             onTriggerSecret={(msg) => showToast(msg, 'success')}
           />
 
+          {/* Offline Sync Banner (Pro feature + offline status) */}
+          <OfflineSyncBanner
+            subscription={subscription}
+            onOpenUpgradeGate={openUpgradeGate}
+            onShowToast={showToast}
+            onSyncComplete={async () => {
+              await loadUserTrips(activeTripId);
+            }}
+          />
+
           {/* Sub-Navigation Tabs */}
           <TabsNav
             currentTab={currentTab}
@@ -463,7 +495,12 @@ export function App() {
               <PlansView
                 currentUser={currentUser}
                 subscription={subscription}
-                onRefreshSubscription={fetchSubscription}
+                onRefreshSubscription={async (updatedSub?: UserSubscription) => {
+                  if (updatedSub) {
+                    setSubscription(updatedSub);
+                  }
+                  return await fetchSubscription();
+                }}
                 onTriggerToast={showToast}
               />
             ) : currentTab === 'profile' ? (
@@ -516,6 +553,7 @@ export function App() {
                     trip={activeTrip}
                     expenses={expenses}
                     currentUser={currentUser}
+                    subscription={subscription}
                     onOpenExpenseModal={() => {
                       setEditingExpense(null);
                       setIsExpenseModalOpen(true);
@@ -531,6 +569,11 @@ export function App() {
                     }}
                     onExportCSV={handleExportCSV}
                     onOpenExportModal={() => setIsExportModalOpen(true)}
+                    onOpenBankSyncModal={() => setIsBankSyncModalOpen(true)}
+                    onOpenBusinessTripModal={() => setIsBusinessTripModalOpen(true)}
+                    onOpenAnalyticsModal={() => setIsAnalyticsModalOpen(true)}
+                    onOpenUpgradeGate={openUpgradeGate}
+                    onShowToast={showToast}
                   />
                 )}
 
@@ -558,8 +601,10 @@ export function App() {
                     trip={activeTrip}
                     expenses={expenses}
                     currentUser={currentUser}
+                    subscription={subscription}
                     onUpdateTripPlans={handleUpdatePlans}
                     onShowToast={showToast}
+                    onOpenUpgradeGate={openUpgradeGate}
                   />
                 )}
 
@@ -625,6 +670,9 @@ export function App() {
           plan={checkoutPlanModal}
           billingCycle="monthly"
           onSuccess={async (newSub) => {
+            if (newSub) {
+              setSubscription(newSub);
+            }
             await fetchSubscription();
           }}
           onShowToast={showToast}
@@ -651,12 +699,27 @@ export function App() {
           expense={editingExpense}
           trip={activeTrip}
           currentUser={currentUser}
+          subscription={subscription}
           onSave={handleSaveExpense}
           onClose={() => {
             setIsExpenseModalOpen(false);
             setEditingExpense(null);
           }}
           onTriggerSecret={(msg) => showToast(msg, 'success')}
+          onOpenUpgradeGate={openUpgradeGate}
+          onShowToast={showToast}
+        />
+      )}
+
+      {/* PWA Floating Compact Summary Widget (Pro Feature) */}
+      {currentUser && activeTrip && currentTab !== 'chat' && (
+        <PwaCompactWidget
+          trip={activeTrip}
+          expenses={expenses}
+          currentUser={currentUser}
+          subscription={subscription}
+          onOpenAppTab={(tab) => setCurrentTab(tab)}
+          onOpenUpgradeGate={openUpgradeGate}
         />
       )}
 
@@ -687,6 +750,58 @@ export function App() {
           activeTripId={activeTripId}
           expenses={expenses}
           currentUser={currentUser}
+          onShowToast={showToast}
+        />
+      )}
+
+      {/* Open Banking Sync Modal (Premium Feature 1) */}
+      {isBankSyncModalOpen && currentUser && activeTrip && (
+        <BankSyncModal
+          isOpen={isBankSyncModalOpen}
+          onClose={() => setIsBankSyncModalOpen(false)}
+          trip={activeTrip}
+          currentUser={currentUser}
+          subscription={subscription}
+          onExpensesImported={async () => {
+            if (activeTripId) {
+              const exp = await api.getExpenses(activeTripId);
+              setExpenses(exp);
+            }
+          }}
+          onOpenPlans={() => openUpgradeGate('Sincronización Bancaria Automática', 'Conexión Open Banking para importar movimientos bancarios directamente.', 'premium')}
+          onShowToast={showToast}
+        />
+      )}
+
+      {/* Business Trip Mode & Corporate Metadata Modal (Premium Feature 4) */}
+      {isBusinessTripModalOpen && currentUser && activeTrip && (
+        <BusinessTripModal
+          isOpen={isBusinessTripModalOpen}
+          onClose={() => setIsBusinessTripModalOpen(false)}
+          trip={activeTrip}
+          expenses={expenses}
+          currentUser={currentUser}
+          subscription={subscription}
+          onUpdateTripMetadata={async (metadata) => {
+            const updated = await api.saveTrip({ ...activeTrip, isBusinessTrip: true, businessMetadata: metadata });
+            setTrips((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+            showToast('Metadatos corporativos del viaje guardados.', 'success');
+          }}
+          onOpenPlans={() => openUpgradeGate('Modo Viaje de Negocios', 'Rendición de cuentas corporativa y reportes con IVA/tax deductibles.', 'premium')}
+          onShowToast={showToast}
+        />
+      )}
+
+      {/* Cross-Trip Analytics & Budget Projection Modal (Premium Feature 3) */}
+      {isAnalyticsModalOpen && currentUser && (
+        <CrossTripAnalyticsModal
+          isOpen={isAnalyticsModalOpen}
+          onClose={() => setIsAnalyticsModalOpen(false)}
+          trips={trips}
+          allExpenses={expenses}
+          currentUser={currentUser}
+          subscription={subscription}
+          onOpenPlans={() => openUpgradeGate('Reportes Comparativos & IA', 'Analítica transversal histórica y proyecciones de gasto futuro con IA.', 'premium')}
           onShowToast={showToast}
         />
       )}

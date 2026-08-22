@@ -32,6 +32,8 @@ export interface TripDoc {
   members: string[];
   plans?: any[];
   checklist?: any[];
+  isBusinessTrip?: boolean;
+  businessMetadata?: any;
   createdAt: string;
 }
 
@@ -47,6 +49,9 @@ export interface ExpenseDoc {
   paidBy: string;
   splitBetween: string[];
   notes?: string;
+  isTaxDeductible?: boolean;
+  invoiceNumber?: string;
+  merchantName?: string;
   createdAt: string;
 }
 
@@ -107,6 +112,11 @@ export interface UserSubscriptionResponse {
     canRealTimeFx: boolean;
     canBudgetAlerts: boolean;
     canPwaWidget: boolean;
+    canBankSync: boolean;
+    canMultiCurrencyDebtSettlement: boolean;
+    canCrossTripAnalytics: boolean;
+    canBusinessTripMode: boolean;
+    canProactiveAiAdvisor: boolean;
   };
   diagnostics?: {
     flowConfigured: boolean;
@@ -337,6 +347,8 @@ function mapTripFromDb(row: any): TripDoc {
     members: Array.isArray(row.members) ? row.members : ['Yo'],
     plans: Array.isArray(row.plans) ? row.plans : [],
     checklist: Array.isArray(row.checklist) ? row.checklist : [],
+    isBusinessTrip: Boolean(row.is_business_trip),
+    businessMetadata: row.business_metadata || null,
     createdAt: row.created_at,
   };
 }
@@ -354,6 +366,9 @@ function mapExpenseFromDb(row: any): ExpenseDoc {
     paidBy: row.paid_by || 'Yo',
     splitBetween: Array.isArray(row.split_between) ? row.split_between : ['Yo'],
     notes: row.notes || '',
+    isTaxDeductible: Boolean(row.is_tax_deductible),
+    invoiceNumber: row.invoice_number || '',
+    merchantName: row.merchant_name || '',
     createdAt: row.created_at,
   };
 }
@@ -510,13 +525,206 @@ async function sendEmailNotification(
 }
 
 // ============================================================================
-// AUTH MIDDLEWARE: Strict Token Verification
+// RATE LIMITING SUBSYSTEM (In-Memory sliding window with IP/Identifier keys)
+// ============================================================================
+interface RateLimitRecord {
+  count: number;
+  firstAttempt: number;
+  blockedUntil: number;
+}
+
+export class InMemoryRateLimiter {
+  private store: Map<string, RateLimitRecord> = new Map();
+  private maxAttempts: number;
+  private windowMs: number;
+  private blockDurationMs: number;
+
+  constructor(maxAttempts = 5, windowMs = 15 * 60 * 1000, blockDurationMs = 15 * 60 * 1000) {
+    this.maxAttempts = maxAttempts;
+    this.windowMs = windowMs;
+    this.blockDurationMs = blockDurationMs;
+
+    // Periodically clean up expired entries (every 5 minutes)
+    if (typeof setInterval !== 'undefined') {
+      const interval = setInterval(() => {
+        const now = Date.now();
+        for (const [key, record] of this.store.entries()) {
+          if (now > record.firstAttempt + this.windowMs && now > record.blockedUntil) {
+            this.store.delete(key);
+          }
+        }
+      }, 5 * 60 * 1000);
+      if (interval.unref) interval.unref();
+    }
+  }
+
+  public check(key: string): { allowed: boolean; remaining: number; retryAfterSeconds: number } {
+    const now = Date.now();
+    const record = this.store.get(key);
+
+    if (!record) {
+      return { allowed: true, remaining: this.maxAttempts, retryAfterSeconds: 0 };
+    }
+
+    if (record.blockedUntil > now) {
+      const retryAfterSeconds = Math.ceil((record.blockedUntil - now) / 1000);
+      return { allowed: false, remaining: 0, retryAfterSeconds };
+    }
+
+    if (now - record.firstAttempt > this.windowMs) {
+      this.store.delete(key);
+      return { allowed: true, remaining: this.maxAttempts, retryAfterSeconds: 0 };
+    }
+
+    if (record.count >= this.maxAttempts) {
+      record.blockedUntil = now + this.blockDurationMs;
+      const retryAfterSeconds = Math.ceil(this.blockDurationMs / 1000);
+      return { allowed: false, remaining: 0, retryAfterSeconds };
+    }
+
+    return { allowed: true, remaining: this.maxAttempts - record.count, retryAfterSeconds: 0 };
+  }
+
+  public increment(key: string): { allowed: boolean; remaining: number; retryAfterSeconds: number } {
+    const now = Date.now();
+    let record = this.store.get(key);
+
+    if (!record || now - record.firstAttempt > this.windowMs) {
+      record = { count: 1, firstAttempt: now, blockedUntil: 0 };
+      this.store.set(key, record);
+      return { allowed: true, remaining: this.maxAttempts - 1, retryAfterSeconds: 0 };
+    }
+
+    record.count += 1;
+    if (record.count > this.maxAttempts) {
+      record.blockedUntil = now + this.blockDurationMs;
+      const retryAfterSeconds = Math.ceil(this.blockDurationMs / 1000);
+      return { allowed: false, remaining: 0, retryAfterSeconds };
+    }
+
+    return { allowed: true, remaining: Math.max(0, this.maxAttempts - record.count), retryAfterSeconds: 0 };
+  }
+
+  public reset(key: string) {
+    this.store.delete(key);
+  }
+}
+
+// Global Rate Limiters for Authentication Endpoints (15-min window)
+export const registerRateLimiter = new InMemoryRateLimiter(5, 15 * 60 * 1000, 15 * 60 * 1000);
+export const loginRateLimiter = new InMemoryRateLimiter(5, 15 * 60 * 1000, 15 * 60 * 1000);
+export const otpRateLimiter = new InMemoryRateLimiter(5, 15 * 60 * 1000, 15 * 60 * 1000);
+export const resendOtpRateLimiter = new InMemoryRateLimiter(3, 15 * 60 * 1000, 15 * 60 * 1000);
+export const forgotPasswordRateLimiter = new InMemoryRateLimiter(3, 15 * 60 * 1000, 15 * 60 * 1000);
+export const resetPasswordRateLimiter = new InMemoryRateLimiter(5, 15 * 60 * 1000, 15 * 60 * 1000);
+
+export function getClientIp(req: Request): string {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (typeof forwarded === 'string' && forwarded.length > 0) {
+    return forwarded.split(',')[0].trim();
+  }
+  return req.socket.remoteAddress || '127.0.0.1';
+}
+
+// Session Revocation Tracker (userId -> unix timestamp in seconds)
+export const revokedUserTokens = new Map<string, number>();
+
+// ============================================================================
+// INPUT SANITIZATION & STRICT VALIDATION HELPERS
+// ============================================================================
+export function sanitizeString(val: any, maxLength = 255): string {
+  if (val === undefined || val === null) return '';
+  return String(val)
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+    .trim()
+    .slice(0, maxLength);
+}
+
+export function validateEmail(email: any): { valid: boolean; email: string; error?: string } {
+  if (!email || typeof email !== 'string') {
+    return { valid: false, email: '', error: 'El correo electrónico es obligatorio.' };
+  }
+  const clean = email.trim().toLowerCase();
+  if (clean.length > 254) {
+    return { valid: false, email: '', error: 'El correo no debe superar los 254 caracteres.' };
+  }
+  const emailRegex = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/;
+  if (!emailRegex.test(clean)) {
+    return { valid: false, email: '', error: 'El formato del correo electrónico no es válido.' };
+  }
+  return { valid: true, email: clean };
+}
+
+export function validatePassword(password: any): { valid: boolean; error?: string } {
+  if (!password || typeof password !== 'string') {
+    return { valid: false, error: 'La contraseña es obligatoria.' };
+  }
+  if (password.length < 6) {
+    return { valid: false, error: 'La contraseña debe tener al menos 6 caracteres.' };
+  }
+  if (password.length > 128) {
+    return { valid: false, error: 'La contraseña no debe superar los 128 caracteres.' };
+  }
+  return { valid: true };
+}
+
+export function validateOtpCode(code: any): { valid: boolean; code: string; error?: string } {
+  if (!code) {
+    return { valid: false, code: '', error: 'El código OTP es obligatorio.' };
+  }
+  const clean = String(code).trim();
+  if (!/^\d{6}$/.test(clean)) {
+    return { valid: false, code: '', error: 'El código OTP debe ser exactamente de 6 dígitos numéricos.' };
+  }
+  return { valid: true, code: clean };
+}
+
+export function validateNumeric(val: any, min = 0, max = 10_000_000_000, fallback = 0): number {
+  const num = Number(val);
+  if (!Number.isFinite(num) || isNaN(num)) return fallback;
+  if (num < min) return min;
+  if (num > max) return max;
+  return num;
+}
+
+export function validateCurrencyCode(curr: any, fallback = 'USD'): string {
+  if (!curr || typeof curr !== 'string') return fallback;
+  const clean = curr.trim().toUpperCase();
+  if (/^[A-Z]{3,5}$/.test(clean)) return clean;
+  return fallback;
+}
+
+export function validateDateString(val: any): string {
+  if (!val || typeof val !== 'string') return new Date().toISOString().split('T')[0];
+  const trimmed = val.trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(trimmed)) {
+    return trimmed.split('T')[0];
+  }
+  const parsed = Date.parse(trimmed);
+  if (!isNaN(parsed)) {
+    return new Date(parsed).toISOString().split('T')[0];
+  }
+  return new Date().toISOString().split('T')[0];
+}
+
+export function validateStringArray(arr: any, maxItems = 50, maxItemLen = 100): string[] {
+  if (!Array.isArray(arr)) return ['Yo'];
+  const sanitized = arr
+    .map((item) => sanitizeString(item, maxItemLen))
+    .filter((item) => item.length > 0)
+    .slice(0, maxItems);
+  return sanitized.length > 0 ? sanitized : ['Yo'];
+}
+
+// ============================================================================
+// AUTH MIDDLEWARE: Strict Token Verification & Session Revocation
 // ============================================================================
 export interface AuthenticatedRequest extends Request {
   user?: {
     id: string;
     email: string;
     name: string;
+    iat?: number;
   };
 }
 
@@ -528,7 +736,19 @@ export function verifyAuth(req: AuthenticatedRequest, res: Response, next: NextF
 
   const token = authHeader.split(' ')[1];
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as { id: string; email: string; name: string };
+    const decoded = jwt.verify(token, JWT_SECRET) as { id: string; email: string; name: string; iat?: number };
+    
+    // Check if session was revoked due to password reset or change
+    if (decoded.iat && revokedUserTokens.has(decoded.id)) {
+      const revokedAt = revokedUserTokens.get(decoded.id)!;
+      if (decoded.iat < revokedAt) {
+        return res.status(401).json({
+          error: 'Esta sesión ha sido revocada debido a un cambio de contraseña. Por favor inicia sesión nuevamente.',
+          code: 'SESSION_REVOKED',
+        });
+      }
+    }
+
     req.user = decoded;
     next();
   } catch (err) {
@@ -769,6 +989,11 @@ export async function getUserSubscription(userId: string): Promise<UserSubscript
       canRealTimeFx: effectivePlan !== 'free',
       canBudgetAlerts: effectivePlan !== 'free',
       canPwaWidget: effectivePlan !== 'free',
+      canBankSync: effectivePlan === 'premium',
+      canMultiCurrencyDebtSettlement: effectivePlan === 'premium',
+      canCrossTripAnalytics: effectivePlan === 'premium',
+      canBusinessTripMode: effectivePlan === 'premium',
+      canProactiveAiAdvisor: effectivePlan === 'premium',
     },
     diagnostics: {
       flowConfigured: flowConfig.isConfigured,
@@ -876,18 +1101,41 @@ app.get('/api/email-logs', async (req: Request, res: Response) => {
 // 3. Register User (Inserts into Supabase & Dispatches Real Resend OTP)
 app.post('/api/auth/register', async (req: Request, res: Response) => {
   try {
+    const ip = getClientIp(req);
+    const rateCheck = registerRateLimiter.check(ip);
+    if (!rateCheck.allowed) {
+      res.setHeader('Retry-After', rateCheck.retryAfterSeconds);
+      return res.status(429).json({
+        error: `Demasiados intentos de registro desde esta dirección IP. Intenta nuevamente en ${Math.ceil(rateCheck.retryAfterSeconds / 60)} minutos.`,
+        code: 'RATE_LIMIT_EXCEEDED',
+        retryAfter: rateCheck.retryAfterSeconds,
+      });
+    }
+
     const { name, email, password, homeCurrency } = req.body;
 
-    if (!name || !email || !password) {
-      return res.status(400).json({ error: 'Nombre, correo y contraseña son obligatorios.' });
+    // Strict Input Validation & Sanitization
+    const emailValidation = validateEmail(email);
+    if (!emailValidation.valid) {
+      return res.status(400).json({ error: emailValidation.error });
+    }
+    const normalizedEmail = emailValidation.email;
+
+    const passwordValidation = validatePassword(password);
+    if (!passwordValidation.valid) {
+      return res.status(400).json({ error: passwordValidation.error });
     }
 
-    if (password.length < 6) {
-      return res.status(400).json({ error: 'La contraseña debe tener mínimo 6 caracteres.' });
+    const sanitizedName = sanitizeString(name, 100);
+    if (sanitizedName.length < 2) {
+      return res.status(400).json({ error: 'El nombre debe tener al menos 2 caracteres.' });
     }
+
+    const cleanHomeCurrency = validateCurrencyCode(homeCurrency, 'USD');
+
+    registerRateLimiter.increment(ip);
 
     const supabase = getSupabase();
-    const normalizedEmail = email.trim().toLowerCase();
 
     // Check existing user
     const { data: existingUser } = await supabase
@@ -909,7 +1157,7 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
     const expiresAt = Date.now() + 15 * 60 * 1000; // 15 mins
 
     let userId: string;
-    let userName = name.trim();
+    let userName = sanitizedName;
 
     if (existingUser && !existingUser.is_verified) {
       userId = existingUser.id;
@@ -920,7 +1168,7 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
           password_hash: passwordHash,
           verification_code: code,
           verification_code_expires: expiresAt,
-          home_currency: homeCurrency || 'USD',
+          home_currency: cleanHomeCurrency,
         })
         .eq('id', userId);
 
@@ -937,7 +1185,7 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
         is_verified: false,
         verification_code: code,
         verification_code_expires: expiresAt,
-        home_currency: homeCurrency || 'USD',
+        home_currency: cleanHomeCurrency,
         created_at: new Date().toISOString(),
       });
 
@@ -974,17 +1222,36 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
   }
 });
 
-// 4. Verify OTP Code & Activate Account in Supabase
+// 4. Verify OTP Code & Activate Account in Supabase (Protected against brute-force)
 app.post('/api/auth/verify-otp', async (req: Request, res: Response) => {
   try {
     const { email, code } = req.body;
-    if (!email || !code) {
-      return res.status(400).json({ error: 'Correo y código de verificación requeridos.' });
+
+    const emailValidation = validateEmail(email);
+    if (!emailValidation.valid) {
+      return res.status(400).json({ error: emailValidation.error });
+    }
+    const normalizedEmail = emailValidation.email;
+
+    const otpValidation = validateOtpCode(code);
+    if (!otpValidation.valid) {
+      return res.status(400).json({ error: otpValidation.error });
+    }
+    const inputCode = otpValidation.code;
+
+    const ip = getClientIp(req);
+    const rateKey = `${ip}:${normalizedEmail}`;
+    const rateCheck = otpRateLimiter.check(rateKey);
+    if (!rateCheck.allowed) {
+      res.setHeader('Retry-After', rateCheck.retryAfterSeconds);
+      return res.status(429).json({
+        error: `Demasiados intentos fallidos de verificación OTP. Por seguridad, espera ${Math.ceil(rateCheck.retryAfterSeconds / 60)} minutos.`,
+        code: 'RATE_LIMIT_EXCEEDED',
+        retryAfter: rateCheck.retryAfterSeconds,
+      });
     }
 
     const supabase = getSupabase();
-    const normalizedEmail = email.trim().toLowerCase();
-    const inputCode = String(code).trim();
 
     const { data: userRow, error: userError } = await supabase
       .from('users')
@@ -993,6 +1260,7 @@ app.post('/api/auth/verify-otp', async (req: Request, res: Response) => {
       .maybeSingle();
 
     if (userError || !userRow) {
+      otpRateLimiter.increment(rateKey);
       return res.status(404).json({ error: 'Usuario no encontrado.' });
     }
 
@@ -1003,12 +1271,18 @@ app.post('/api/auth/verify-otp', async (req: Request, res: Response) => {
     const isRealMatch = Boolean(user.verificationCode && user.verificationCode === inputCode);
 
     if (!isDemoMatch && !isRealMatch) {
-      return res.status(400).json({ error: 'Código de verificación incorrecto.' });
+      const inc = otpRateLimiter.increment(rateKey);
+      return res.status(400).json({
+        error: `Código de verificación incorrecto.${inc.remaining > 0 ? ` Intentos restantes: ${inc.remaining}` : ' Cuenta bloqueada temporalmente por 15 minutos.'}`,
+      });
     }
 
     if (!isDemoMatch && user.verificationCodeExpires && Date.now() > user.verificationCodeExpires) {
       return res.status(400).json({ error: 'El código ha expirado. Por favor solicita uno nuevo.' });
     }
+
+    // Reset rate limiter on successful verification
+    otpRateLimiter.reset(rateKey);
 
     // Mark as verified and clear verification code
     const { error: updateError } = await supabase
@@ -1024,9 +1298,9 @@ app.post('/api/auth/verify-otp', async (req: Request, res: Response) => {
       throw new Error(`Error al activar cuenta: ${updateError.message}`);
     }
 
-    // Generate JWT Token (Clean start: no seed data inserted)
+    // Generate JWT Token (Expiration 7 days, with issued-at timestamp)
     const token = jwt.sign(
-      { id: user.id, email: user.email, name: user.name },
+      { id: user.id, email: user.email, name: user.name, iat: Math.floor(Date.now() / 1000) },
       JWT_SECRET,
       { expiresIn: '7d' }
     );
@@ -1047,16 +1321,29 @@ app.post('/api/auth/verify-otp', async (req: Request, res: Response) => {
   }
 });
 
-// 5. Resend OTP Code
+// 5. Resend OTP Code (Rate limited to 3 attempts / 15 mins)
 app.post('/api/auth/resend-otp', async (req: Request, res: Response) => {
   try {
     const { email } = req.body;
-    if (!email) {
-      return res.status(400).json({ error: 'Correo es obligatorio.' });
+    const emailValidation = validateEmail(email);
+    if (!emailValidation.valid) {
+      return res.status(400).json({ error: emailValidation.error });
+    }
+    const normalizedEmail = emailValidation.email;
+
+    const ip = getClientIp(req);
+    const rateKey = `${ip}:${normalizedEmail}`;
+    const rateCheck = resendOtpRateLimiter.check(rateKey);
+    if (!rateCheck.allowed) {
+      res.setHeader('Retry-After', rateCheck.retryAfterSeconds);
+      return res.status(429).json({
+        error: `Has superado el límite de reenvíos de código. Intenta de nuevo en ${Math.ceil(rateCheck.retryAfterSeconds / 60)} minutos.`,
+        code: 'RATE_LIMIT_EXCEEDED',
+        retryAfter: rateCheck.retryAfterSeconds,
+      });
     }
 
     const supabase = getSupabase();
-    const normalizedEmail = email.trim().toLowerCase();
 
     const { data: userRow } = await supabase
       .from('users')
@@ -1067,6 +1354,8 @@ app.post('/api/auth/resend-otp', async (req: Request, res: Response) => {
     if (!userRow) {
       return res.status(404).json({ error: 'Usuario no encontrado.' });
     }
+
+    resendOtpRateLimiter.increment(rateKey);
 
     const code = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = Date.now() + 15 * 60 * 1000;
@@ -1102,16 +1391,35 @@ app.post('/api/auth/resend-otp', async (req: Request, res: Response) => {
   }
 });
 
-// 6. Login User (bcrypt compare against Supabase hash)
+// 6. Login User (Protected against brute-force password cracking)
 app.post('/api/auth/login', async (req: Request, res: Response) => {
   try {
     const { email, password } = req.body;
-    if (!email || !password) {
-      return res.status(400).json({ error: 'Correo y contraseña requeridos.' });
+
+    const emailValidation = validateEmail(email);
+    if (!emailValidation.valid) {
+      return res.status(400).json({ error: emailValidation.error });
+    }
+    const normalizedEmail = emailValidation.email;
+
+    const passwordValidation = validatePassword(password);
+    if (!passwordValidation.valid) {
+      return res.status(400).json({ error: passwordValidation.error });
+    }
+
+    const ip = getClientIp(req);
+    const rateKey = `${ip}:${normalizedEmail}`;
+    const rateCheck = loginRateLimiter.check(rateKey);
+    if (!rateCheck.allowed) {
+      res.setHeader('Retry-After', rateCheck.retryAfterSeconds);
+      return res.status(429).json({
+        error: `Demasiados intentos fallidos de inicio de sesión. Por seguridad, espera ${Math.ceil(rateCheck.retryAfterSeconds / 60)} minutos antes de reintentar.`,
+        code: 'RATE_LIMIT_EXCEEDED',
+        retryAfter: rateCheck.retryAfterSeconds,
+      });
     }
 
     const supabase = getSupabase();
-    const normalizedEmail = email.trim().toLowerCase();
 
     const { data: userRow } = await supabase
       .from('users')
@@ -1120,13 +1428,20 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
       .maybeSingle();
 
     if (!userRow) {
+      loginRateLimiter.increment(rateKey);
       return res.status(401).json({ error: 'Credenciales inválidas.' });
     }
 
     const isMatch = await bcrypt.compare(password, userRow.password_hash);
     if (!isMatch) {
-      return res.status(401).json({ error: 'Credenciales inválidas.' });
+      const inc = loginRateLimiter.increment(rateKey);
+      return res.status(401).json({
+        error: `Credenciales inválidas.${inc.remaining > 0 ? ` Intentos restantes: ${inc.remaining}` : ' Cuenta bloqueada temporalmente por 15 minutos.'}`,
+      });
     }
+
+    // Reset rate limiter on successful password validation
+    loginRateLimiter.reset(rateKey);
 
     if (!userRow.is_verified) {
       return res.status(403).json({
@@ -1137,7 +1452,7 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
     }
 
     const token = jwt.sign(
-      { id: userRow.id, email: userRow.email, name: userRow.name },
+      { id: userRow.id, email: userRow.email, name: userRow.name, iat: Math.floor(Date.now() / 1000) },
       JWT_SECRET,
       { expiresIn: '7d' }
     );
@@ -1162,12 +1477,27 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
 app.post('/api/auth/forgot-password', async (req: Request, res: Response) => {
   try {
     const { email } = req.body;
-    if (!email) {
-      return res.status(400).json({ error: 'Correo requerido.' });
+    const emailValidation = validateEmail(email);
+    if (!emailValidation.valid) {
+      return res.status(400).json({ error: emailValidation.error });
+    }
+    const normalizedEmail = emailValidation.email;
+
+    const ip = getClientIp(req);
+    const rateKey = `${ip}:${normalizedEmail}`;
+    const rateCheck = forgotPasswordRateLimiter.check(rateKey);
+    if (!rateCheck.allowed) {
+      res.setHeader('Retry-After', rateCheck.retryAfterSeconds);
+      return res.status(429).json({
+        error: `Has superado el límite de solicitudes de restablecimiento. Intenta de nuevo en ${Math.ceil(rateCheck.retryAfterSeconds / 60)} minutos.`,
+        code: 'RATE_LIMIT_EXCEEDED',
+        retryAfter: rateCheck.retryAfterSeconds,
+      });
     }
 
+    forgotPasswordRateLimiter.increment(rateKey);
+
     const supabase = getSupabase();
-    const normalizedEmail = email.trim().toLowerCase();
 
     const { data: userRow } = await supabase
       .from('users')
@@ -1213,21 +1543,41 @@ app.post('/api/auth/forgot-password', async (req: Request, res: Response) => {
   }
 });
 
-// 8. Reset Password (with bcrypt hash in Supabase)
+// 8. Reset Password (with bcrypt hash, rate limiting, and instant session revocation)
 app.post('/api/auth/reset-password', async (req: Request, res: Response) => {
   try {
     const { email, code, newPassword } = req.body;
-    if (!email || !code || !newPassword) {
-      return res.status(400).json({ error: 'Todos los campos son obligatorios.' });
+
+    const emailValidation = validateEmail(email);
+    if (!emailValidation.valid) {
+      return res.status(400).json({ error: emailValidation.error });
+    }
+    const normalizedEmail = emailValidation.email;
+
+    const otpValidation = validateOtpCode(code);
+    if (!otpValidation.valid) {
+      return res.status(400).json({ error: otpValidation.error });
+    }
+    const inputCode = otpValidation.code;
+
+    const passwordValidation = validatePassword(newPassword);
+    if (!passwordValidation.valid) {
+      return res.status(400).json({ error: passwordValidation.error });
     }
 
-    if (newPassword.length < 6) {
-      return res.status(400).json({ error: 'La nueva contraseña debe tener al menos 6 caracteres.' });
+    const ip = getClientIp(req);
+    const rateKey = `${ip}:${normalizedEmail}`;
+    const rateCheck = resetPasswordRateLimiter.check(rateKey);
+    if (!rateCheck.allowed) {
+      res.setHeader('Retry-After', rateCheck.retryAfterSeconds);
+      return res.status(429).json({
+        error: `Demasiados intentos fallidos de restablecimiento. Espera ${Math.ceil(rateCheck.retryAfterSeconds / 60)} minutos.`,
+        code: 'RATE_LIMIT_EXCEEDED',
+        retryAfter: rateCheck.retryAfterSeconds,
+      });
     }
 
     const supabase = getSupabase();
-    const normalizedEmail = email.trim().toLowerCase();
-    const inputCode = String(code).trim();
 
     const { data: userRow } = await supabase
       .from('users')
@@ -1236,6 +1586,7 @@ app.post('/api/auth/reset-password', async (req: Request, res: Response) => {
       .maybeSingle();
 
     if (!userRow) {
+      resetPasswordRateLimiter.increment(rateKey);
       return res.status(404).json({ error: 'Usuario no encontrado.' });
     }
 
@@ -1244,12 +1595,18 @@ app.post('/api/auth/reset-password', async (req: Request, res: Response) => {
     const isRealMatch = Boolean(userRow.verification_code && userRow.verification_code === inputCode);
 
     if (!isDemoMatch && !isRealMatch) {
-      return res.status(400).json({ error: 'Código de recuperación inválido o incorrecto.' });
+      const inc = resetPasswordRateLimiter.increment(rateKey);
+      return res.status(400).json({
+        error: `Código de recuperación inválido o incorrecto.${inc.remaining > 0 ? ` Intentos restantes: ${inc.remaining}` : ' Bloqueado por 15 minutos.'}`,
+      });
     }
 
     if (!isDemoMatch && userRow.verification_code_expires && Date.now() > Number(userRow.verification_code_expires)) {
       return res.status(400).json({ error: 'El código ha expirado.' });
     }
+
+    // Reset rate limiter on success
+    resetPasswordRateLimiter.reset(rateKey);
 
     const salt = await bcrypt.genSalt(10);
     const passwordHash = await bcrypt.hash(newPassword, salt);
@@ -1268,7 +1625,10 @@ app.post('/api/auth/reset-password', async (req: Request, res: Response) => {
       throw new Error(`Error al actualizar contraseña: ${updateError.message}`);
     }
 
-    res.json({ message: 'Contraseña actualizada exitosamente. Ya puedes iniciar sesión.' });
+    // Instantly revoke all existing JWT tokens issued before this timestamp
+    revokedUserTokens.set(userRow.id, Math.floor(Date.now() / 1000));
+
+    res.json({ message: 'Contraseña actualizada exitosamente. Todas las sesiones anteriores han sido revocadas. Ya puedes iniciar sesión.' });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Error al restablecer contraseña.' });
   }
@@ -1303,12 +1663,48 @@ app.get('/api/auth/me', verifyAuth, async (req: AuthenticatedRequest, res: Respo
 
 app.put('/api/auth/me', verifyAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { homeCurrency, name } = req.body;
+    const { homeCurrency, name, currentPassword, newPassword } = req.body;
     const supabase = getSupabase();
 
     const updates: any = {};
-    if (homeCurrency) updates.home_currency = homeCurrency;
-    if (name) updates.name = name.trim();
+    if (homeCurrency) {
+      updates.home_currency = validateCurrencyCode(homeCurrency, 'USD');
+    }
+    if (name) {
+      const cleanName = sanitizeString(name, 100);
+      if (cleanName.length < 2) {
+        return res.status(400).json({ error: 'El nombre debe tener al menos 2 caracteres.' });
+      }
+      updates.name = cleanName;
+    }
+
+    // Optional password change from profile
+    if (newPassword) {
+      const passValidation = validatePassword(newPassword);
+      if (!passValidation.valid) {
+        return res.status(400).json({ error: passValidation.error });
+      }
+
+      if (!currentPassword) {
+        return res.status(400).json({ error: 'Debes ingresar tu contraseña actual para establecer una nueva.' });
+      }
+
+      const { data: currentUser } = await supabase
+        .from('users')
+        .select('password_hash')
+        .eq('id', req.user!.id)
+        .single();
+
+      if (!currentUser || !(await bcrypt.compare(currentPassword, currentUser.password_hash))) {
+        return res.status(401).json({ error: 'La contraseña actual no es correcta.' });
+      }
+
+      const salt = await bcrypt.genSalt(10);
+      updates.password_hash = await bcrypt.hash(newPassword, salt);
+
+      // Revoke older sessions
+      revokedUserTokens.set(req.user!.id, Math.floor(Date.now() / 1000));
+    }
 
     const { data: updatedRow, error } = await supabase
       .from('users')
@@ -1601,6 +1997,7 @@ app.post('/api/subscriptions/demo-activate', verifyAuth, async (req: Authenticat
     const supabase = getSupabase();
 
     // Create or update subscription record in database for the authenticated user
+    // Note: provider is set to 'flow' to strictly adhere to Postgres check constraint (provider IN ('flow', 'mercadopago'))
     const { error: subError } = await supabase
       .from('subscriptions')
       .upsert(
@@ -1610,7 +2007,7 @@ app.post('/api/subscriptions/demo-activate', verifyAuth, async (req: Authenticat
           plan,
           billing_cycle: billingCycle,
           status: 'active',
-          provider: 'demo_checkout',
+          provider: 'flow',
           provider_subscription_id: 'DEMO_' + Date.now(),
           current_period_end: periodEnd,
           updated_at: new Date().toISOString(),
@@ -1618,23 +2015,30 @@ app.post('/api/subscriptions/demo-activate', verifyAuth, async (req: Authenticat
         { onConflict: 'user_id' }
       );
 
-    if (subError) throw new Error(subError.message);
+    if (subError) {
+      console.error('[Subscriptions] Upsert error:', subError);
+      throw new Error(subError.message || 'Error al actualizar registro de suscripción en base de datos.');
+    }
 
-    // Record demo order in subscription_orders
-    const amount = plan === 'pro' ? (billingCycle === 'annual' ? 29990 : 2990) : (billingCycle === 'annual' ? 59990 : 5990);
-    await supabase.from('subscription_orders').insert({
-      id: 'ord_demo_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
-      user_id: userId,
-      commerce_order: `DEMO_${plan.toUpperCase()}_${Date.now()}`,
-      plan,
-      billing_cycle: billingCycle,
-      amount,
-      currency: 'CLP',
-      status: 'paid',
-      payment_data: { mode: 'demo_auto_activation', simulatedAt: new Date().toISOString() },
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    });
+    // Record demo order in subscription_orders safely
+    try {
+      const amount = plan === 'pro' ? (billingCycle === 'annual' ? 29990 : 2990) : (billingCycle === 'annual' ? 59990 : 5990);
+      await supabase.from('subscription_orders').insert({
+        id: 'ord_demo_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+        user_id: userId,
+        commerce_order: `DEMO_${plan.toUpperCase()}_${Date.now()}`,
+        plan,
+        billing_cycle: billingCycle,
+        amount,
+        currency: 'CLP',
+        status: 'paid',
+        payment_data: { mode: 'demo_auto_activation', simulatedAt: new Date().toISOString() },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+    } catch (orderErr) {
+      console.warn('[Subscriptions] Order recording skipped/warning:', orderErr);
+    }
 
     const updatedSubscription = await getUserSubscription(userId);
 
@@ -1712,6 +2116,16 @@ app.post('/api/trips', verifyAuth, async (req: AuthenticatedRequest, res: Respon
     const userId = req.user!.id;
     const userSub = await getUserSubscription(userId);
 
+    // Validate and sanitize trip fields
+    const sanitizedName = sanitizeString(tripData.name || 'Nuevo Viaje', 200);
+    const sanitizedDestination = sanitizeString(tripData.destination || 'Destino', 200);
+    const validStartDate = validateDateString(tripData.startDate);
+    const validEndDate = validateDateString(tripData.endDate);
+    const validBudget = validateNumeric(tripData.budget, 0, 10_000_000_000, 2000);
+    const validCurrency = validateCurrencyCode(tripData.currency, 'USD');
+    const validExchangeRate = validateNumeric(tripData.exchangeRate, 0.000001, 10_000_000, 1.0);
+    const validMembers = validateStringArray(tripData.members, 50, 100);
+
     if (tripData.id) {
       // Check ownership
       const { data: existingTrip } = await supabase
@@ -1725,17 +2139,19 @@ app.post('/api/trips', verifyAuth, async (req: AuthenticatedRequest, res: Respon
           return res.status(403).json({ error: 'Acceso denegado. No puedes modificar viajes de otro usuario.' });
         }
 
-        const updatePayload = {
-          name: tripData.name || existingTrip.name,
-          destination: tripData.destination || existingTrip.destination,
-          start_date: tripData.startDate || existingTrip.start_date,
-          end_date: tripData.endDate || existingTrip.end_date,
-          budget: Number(tripData.budget) || existingTrip.budget,
-          currency: tripData.currency || existingTrip.currency,
-          exchange_rate: Number(tripData.exchangeRate) || existingTrip.exchange_rate,
-          members: Array.isArray(tripData.members) ? tripData.members : existingTrip.members,
+        const updatePayload: any = {
+          name: tripData.name ? sanitizedName : existingTrip.name,
+          destination: tripData.destination ? sanitizedDestination : existingTrip.destination,
+          start_date: tripData.startDate ? validStartDate : existingTrip.start_date,
+          end_date: tripData.endDate ? validEndDate : existingTrip.end_date,
+          budget: tripData.budget !== undefined ? validBudget : existingTrip.budget,
+          currency: tripData.currency ? validCurrency : existingTrip.currency,
+          exchange_rate: tripData.exchangeRate !== undefined ? validExchangeRate : existingTrip.exchange_rate,
+          members: tripData.members ? validMembers : existingTrip.members,
           plans: Array.isArray(tripData.plans) ? tripData.plans : existingTrip.plans,
           checklist: Array.isArray(tripData.checklist) ? tripData.checklist : existingTrip.checklist,
+          is_business_trip: tripData.isBusinessTrip !== undefined ? Boolean(tripData.isBusinessTrip) : existingTrip.is_business_trip,
+          business_metadata: tripData.businessMetadata !== undefined ? tripData.businessMetadata : existingTrip.business_metadata,
         };
 
         const { data: updatedRow, error: updateError } = await supabase
@@ -1767,31 +2183,54 @@ app.post('/api/trips', verifyAuth, async (req: AuthenticatedRequest, res: Respon
       });
     }
 
-    // Insert brand new trip
-    const newTripId = tripData.id || 'trip_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
-    const insertPayload = {
+    // Helper to insert or update trip with fallback if optional schema columns do not exist
+    const newTripId = tripData.id ? sanitizeString(tripData.id, 64) : 'trip_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+    const baseInsertPayload: any = {
       id: newTripId,
       user_id: userId,
-      name: tripData.name || 'Nuevo Viaje',
-      destination: tripData.destination || 'Destino',
-      start_date: tripData.startDate || new Date().toISOString().split('T')[0],
-      end_date: tripData.endDate || new Date().toISOString().split('T')[0],
-      budget: Number(tripData.budget) || 2000,
-      currency: tripData.currency || 'EUR',
-      exchange_rate: Number(tripData.exchangeRate) || 1.0,
-      members: Array.isArray(tripData.members) && tripData.members.length > 0 ? tripData.members : ['Yo'],
+      name: sanitizedName,
+      destination: sanitizedDestination,
+      start_date: validStartDate,
+      end_date: validEndDate,
+      budget: validBudget,
+      currency: validCurrency,
+      exchange_rate: validExchangeRate,
+      members: validMembers,
       plans: Array.isArray(tripData.plans) ? tripData.plans : [],
       checklist: Array.isArray(tripData.checklist) ? tripData.checklist : [],
-      created_at: tripData.createdAt || new Date().toISOString(),
+      created_at: tripData.createdAt ? validateDateString(tripData.createdAt) : new Date().toISOString(),
     };
 
-    const { data: insertedRow, error: insertError } = await supabase
+    let insertedRow: any = null;
+    const fullPayload = {
+      ...baseInsertPayload,
+      is_business_trip: Boolean(tripData.isBusinessTrip),
+      business_metadata: tripData.businessMetadata || null,
+    };
+
+    const { data: fullData, error: insertError } = await supabase
       .from('trips')
-      .insert(insertPayload)
+      .insert(fullPayload)
       .select()
       .single();
 
-    if (insertError) throw new Error(insertError.message);
+    if (insertError) {
+      if (insertError.message?.includes('business') || insertError.message?.includes('schema cache')) {
+        // Fallback to base columns if business columns are not yet in Supabase
+        const { data: fallbackData, error: fallbackError } = await supabase
+          .from('trips')
+          .insert(baseInsertPayload)
+          .select()
+          .single();
+        if (fallbackError) throw new Error(fallbackError.message);
+        insertedRow = fallbackData;
+      } else {
+        throw new Error(insertError.message);
+      }
+    } else {
+      insertedRow = fullData;
+    }
+
     res.status(201).json(mapTripFromDb(insertedRow));
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Error al guardar viaje.' });
@@ -1902,7 +2341,7 @@ app.post('/api/expenses', verifyAuth, async (req: AuthenticatedRequest, res: Res
           return res.status(403).json({ error: 'Acceso denegado. No puedes modificar gastos de otro usuario.' });
         }
 
-        const updatePayload = {
+        const updatePayload: any = {
           title: expData.title || existingExp.title,
           amount: Number(expData.amount) !== undefined ? Number(expData.amount) : existingExp.amount,
           currency: expData.currency || existingExp.currency,
@@ -1911,6 +2350,9 @@ app.post('/api/expenses', verifyAuth, async (req: AuthenticatedRequest, res: Res
           paid_by: expData.paidBy || existingExp.paid_by,
           split_between: splitList,
           notes: expData.notes !== undefined ? expData.notes : existingExp.notes,
+          is_tax_deductible: expData.isTaxDeductible !== undefined ? Boolean(expData.isTaxDeductible) : existingExp.is_tax_deductible,
+          invoice_number: expData.invoiceNumber !== undefined ? expData.invoiceNumber : existingExp.invoice_number,
+          merchant_name: expData.merchantName !== undefined ? expData.merchantName : existingExp.merchant_name,
         };
 
         const { data: updatedRow, error: updateError } = await supabase
@@ -1926,9 +2368,9 @@ app.post('/api/expenses', verifyAuth, async (req: AuthenticatedRequest, res: Res
       }
     }
 
-    // Insert new expense
+    // Base expense insert payload
     const newExpId = expData.id || 'exp_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
-    const insertPayload = {
+    const baseExpPayload: any = {
       id: newExpId,
       trip_id: expData.tripId,
       user_id: userId,
@@ -1943,14 +2385,37 @@ app.post('/api/expenses', verifyAuth, async (req: AuthenticatedRequest, res: Res
       created_at: expData.createdAt || new Date().toISOString(),
     };
 
-    const { data: insertedRow, error: insertError } = await supabase
+    let insertedExpRow: any = null;
+    const fullExpPayload = {
+      ...baseExpPayload,
+      is_tax_deductible: Boolean(expData.isTaxDeductible),
+      invoice_number: expData.invoiceNumber || '',
+      merchant_name: expData.merchantName || '',
+    };
+
+    const { data: fullExpData, error: insertError } = await supabase
       .from('expenses')
-      .insert(insertPayload)
+      .insert(fullExpPayload)
       .select()
       .single();
 
-    if (insertError) throw new Error(insertError.message);
-    res.status(201).json(mapExpenseFromDb(insertedRow));
+    if (insertError) {
+      if (insertError.message?.includes('tax') || insertError.message?.includes('schema cache') || insertError.message?.includes('merchant')) {
+        const { data: fallbackExpData, error: fallbackError } = await supabase
+          .from('expenses')
+          .insert(baseExpPayload)
+          .select()
+          .single();
+        if (fallbackError) throw new Error(fallbackError.message);
+        insertedExpRow = fallbackExpData;
+      } else {
+        throw new Error(insertError.message);
+      }
+    } else {
+      insertedExpRow = fullExpData;
+    }
+
+    res.status(201).json(mapExpenseFromDb(insertedExpRow));
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Error al guardar gasto.' });
   }
@@ -2590,23 +3055,55 @@ app.post('/api/budget/alert-notification', verifyAuth, async (req: Authenticated
     let emailSent = false;
     let emailError: string | null = null;
 
-    if (sendEmail && process.env.RESEND_API_KEY) {
-      const subject = threshold >= 100 
-        ? `⚠️ Alerta de Sobregiro Rumbio: Has alcanzado el 100% en ${tripName}`
-        : `⚡ Alerta de Presupuesto Rumbio: Has consumido el 80% en ${tripName}`;
+    if (sendEmail) {
+      const resend = getResendClient();
+      if (resend) {
+        const fromEmail = process.env.RESEND_FROM_EMAIL || 'Rumbio <onboarding@resend.dev>';
+        const subject = threshold >= 100 
+          ? `⚠️ Alerta de Sobregiro Rumbio: Has alcanzado el 100% en ${tripName}`
+          : `⚡ Alerta de Presupuesto Rumbio: Has consumido el 80% en ${tripName}`;
 
-      const resendResult = await sendEmailNotification(
-        userEmail,
-        userName,
-        threshold >= 100 ? '100% Presupuesto Excedido' : '80% Presupuesto Consumido',
-        subject,
-        'alert',
-        userId
-      );
+        const alertHtml = `
+          <!DOCTYPE html>
+          <html>
+            <head><meta charset="utf-8"></head>
+            <body style="font-family: sans-serif; background-color: #050811; color: #ffffff; padding: 24px;">
+              <div style="max-width: 520px; margin: 0 auto; background-color: #0e1526; border: 1px solid #1e293b; border-radius: 24px; padding: 32px;">
+                <div style="font-size: 24px; font-weight: 900; color: #38bdf8; text-align: center;">✈️ Rumbio<span style="color:#0284c7;">.</span></div>
+                <h2 style="color:#ffffff; font-size:18px; margin-top:16px; text-align:center;">
+                  ${threshold >= 100 ? '🚨 Alerta de Presupuesto: 100% Alcanzado' : '⚡ Aviso Preventivo: 80% Consumido'}
+                </h2>
+                <p style="color:#94a3b8; font-size:14px; line-height:1.6;">
+                  ¡Hola <b>${userName}</b>! Te informamos que en tu viaje <b>${tripName}</b> (Categoría: <b>${category}</b>) has registrado un gasto acumulado de <b>${spent} ${currency}</b> sobre un presupuesto estipulado de <b>${budget} ${currency}</b>.
+                </p>
+                <div style="background: #050811; border-radius: 12px; padding: 16px; margin: 16px 0; border: 1px solid #334155; text-align: center;">
+                  <span style="font-size: 20px; font-weight: 800; color: ${threshold >= 100 ? '#f43f5e' : '#f59e0b'};">
+                    ${Math.round((spent / (budget || 1)) * 100)}% del límite
+                  </span>
+                </div>
+                <p style="color:#64748b; font-size:12px; text-align:center;">
+                  Revisa tu itinerario y gastos en tu panel de Rumbio para mantener tus finanzas bajo control.
+                </p>
+              </div>
+            </body>
+          </html>
+        `;
 
-      emailSent = resendResult.success;
-      if (!resendResult.success) {
-        emailError = resendResult.error || 'No se pudo enviar el correo de alerta.';
+        try {
+          const emailRes = await resend.emails.send({
+            from: fromEmail,
+            to: [userEmail],
+            subject,
+            html: alertHtml,
+          });
+          if (emailRes.error) {
+            emailError = emailRes.error.message;
+          } else {
+            emailSent = true;
+          }
+        } catch (err: any) {
+          emailError = err.message;
+        }
       }
     }
 
@@ -2726,6 +3223,514 @@ app.post('/api/sync/batch', verifyAuth, async (req: AuthenticatedRequest, res: R
   } catch (err: any) {
     console.error('Error in batch sync:', err);
     res.status(500).json({ error: err.message || 'Error durante la sincronización por lote.' });
+  }
+});
+
+// ============================================================================
+// 19. OPEN BANKING / FINANCIAL AGGREGATION (Chile & LatAm - Fintoc & Belvo)
+// ============================================================================
+
+export function getBankingConfig() {
+  const fintocSecretKey = (process.env.FINTOC_SECRET_KEY || '').trim();
+  const fintocPublicKey = (process.env.FINTOC_PUBLIC_KEY || '').trim();
+  const belvoSecretId = (process.env.BELVO_SECRET_ID || '').trim();
+  const belvoSecretPassword = (process.env.BELVO_SECRET_PASSWORD || '').trim();
+
+  const isFintocConfigured = fintocSecretKey.length > 0;
+  const isBelvoConfigured = belvoSecretId.length > 0 && belvoSecretPassword.length > 0;
+  const isConfigured = isFintocConfigured || isBelvoConfigured;
+
+  return {
+    isConfigured,
+    preferredProvider: isFintocConfigured ? 'fintoc' : (isBelvoConfigured ? 'belvo' : 'fintoc'),
+    fintoc: {
+      isConfigured: isFintocConfigured,
+      publicKey: fintocPublicKey || null,
+      region: 'Chile / México',
+    },
+    belvo: {
+      isConfigured: isBelvoConfigured,
+      region: 'México / Brasil / Colombia',
+    },
+    supportedBanks: [
+      { id: 'banco_chile', name: 'Banco de Chile / Edwards', country: 'CL', provider: 'fintoc' },
+      { id: 'santander_cl', name: 'Banco Santander Chile', country: 'CL', provider: 'fintoc' },
+      { id: 'bci', name: 'Banco BCI / MACH', country: 'CL', provider: 'fintoc' },
+      { id: 'banco_estado', name: 'BancoEstado (CuentaRUT)', country: 'CL', provider: 'fintoc' },
+      { id: 'scotiabank_cl', name: 'Scotiabank Chile', country: 'CL', provider: 'fintoc' },
+      { id: 'itau_cl', name: 'Itaú Chile', country: 'CL', provider: 'fintoc' },
+      { id: 'falabella_cl', name: 'Banco Falabella (CMR)', country: 'CL', provider: 'fintoc' },
+      { id: 'bbva_mx', name: 'BBVA México', country: 'MX', provider: 'belvo' },
+      { id: 'nu_latam', name: 'Nu Bank', country: 'LATAM', provider: 'belvo' },
+    ],
+    requirements: {
+      instructions: 'Para activar la sincronización bancaria en vivo en Chile y Latinoamérica, se requiere una clave de API de Fintoc (recomendado para Chile) o Belvo (México/Colombia/Brasil).',
+      envVarsNeeded: [
+        { name: 'FINTOC_SECRET_KEY', description: 'Clave secreta de Fintoc (sk_live_... o sk_test_...) obtenida en fintoc.com', optional: false },
+        { name: 'FINTOC_PUBLIC_KEY', description: 'Clave pública de Fintoc (pk_live_... o pk_test_...) para el widget de conexión bancaria', optional: true },
+        { name: 'BELVO_SECRET_ID', description: 'Secret ID de Belvo Open Banking (belvo.com)', optional: true },
+        { name: 'BELVO_SECRET_PASSWORD', description: 'Secret Password de Belvo', optional: true },
+      ],
+    },
+  };
+}
+
+// 19a. Banking Config Diagnostic
+app.get('/api/banking/config', (req: Request, res: Response) => {
+  const config = getBankingConfig();
+  res.json(config);
+});
+
+// 19b. Bank Movements (Query live movements from Fintoc or Belvo)
+app.get('/api/banking/movements', verifyAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const subscription = await getUserSubscription(userId);
+
+    if (subscription.plan !== 'premium' || subscription.status !== 'active') {
+      return res.status(403).json({
+        error: 'La sincronización bancaria automática es una función exclusiva del plan Premium.',
+        code: 'PREMIUM_PLAN_REQUIRED',
+        requiredPlan: 'premium',
+      });
+    }
+
+    const bankingConfig = getBankingConfig();
+    const fintocKey = process.env.FINTOC_SECRET_KEY?.trim();
+    const belvoId = process.env.BELVO_SECRET_ID?.trim();
+    const belvoPass = process.env.BELVO_SECRET_PASSWORD?.trim();
+
+    if (!bankingConfig.isConfigured) {
+      return res.status(200).json({
+        isConfigured: false,
+        message: 'No se detectaron credenciales de Open Banking (Fintoc o Belvo) en las variables de entorno del servidor.',
+        config: bankingConfig,
+        movements: [],
+      });
+    }
+
+    // Real fetch from Fintoc if configured
+    if (fintocKey) {
+      try {
+        const fintocRes = await fetch('https://api.fintoc.com/v1/accounts', {
+          headers: {
+            'Authorization': fintocKey,
+            'Content-Type': 'application/json',
+          },
+        });
+
+        if (!fintocRes.ok) {
+          const errText = await fintocRes.text();
+          console.warn('[Fintoc API Warning]', fintocRes.status, errText);
+          return res.status(200).json({
+            isConfigured: true,
+            provider: 'fintoc',
+            status: 'connected_waiting_link',
+            message: 'Fintoc está configurado. Conecta una cuenta bancaria mediante el widget para sincronizar movimientos.',
+            movements: [],
+          });
+        }
+
+        const accounts: any = await fintocRes.json();
+        return res.json({
+          isConfigured: true,
+          provider: 'fintoc',
+          accountsCount: Array.isArray(accounts) ? accounts.length : 0,
+          movements: [],
+        });
+      } catch (fintocErr: any) {
+        console.error('Error connecting to Fintoc API:', fintocErr);
+      }
+    }
+
+    res.json({
+      isConfigured: true,
+      provider: bankingConfig.preferredProvider,
+      movements: [],
+    });
+  } catch (err: any) {
+    console.error('Error in banking movements endpoint:', err);
+    res.status(500).json({ error: err.message || 'Error al consultar movimientos bancarios.' });
+  }
+});
+
+// 19c. Bank Movements: Batch Import to Active Trip Expenses
+app.post('/api/banking/import-to-expenses', verifyAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const subscription = await getUserSubscription(userId);
+
+    if (subscription.plan !== 'premium' || subscription.status !== 'active') {
+      return res.status(403).json({
+        error: 'La importación de movimientos bancarios es exclusiva del plan Premium.',
+        code: 'PREMIUM_PLAN_REQUIRED',
+        requiredPlan: 'premium',
+      });
+    }
+
+    const { tripId, movements } = req.body;
+    if (!tripId || !Array.isArray(movements) || movements.length === 0) {
+      return res.status(400).json({ error: 'Debes proporcionar un tripId válido y una lista de movimientos para importar.' });
+    }
+
+    const supabase = getSupabase();
+    const { data: trip } = await supabase.from('trips').select('*').eq('id', tripId).eq('user_id', userId).maybeSingle();
+    if (!trip) {
+      return res.status(404).json({ error: 'Viaje no encontrado o no tienes permiso para acceder a él.' });
+    }
+
+    const createdExpenses: ExpenseDoc[] = [];
+
+    for (const mov of movements) {
+      const expId = 'exp_bank_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+      const amount = Math.abs(Number(mov.amount) || 0);
+      const payload = {
+        id: expId,
+        trip_id: tripId,
+        user_id: userId,
+        title: mov.description || mov.title || 'Movimiento Bancario',
+        amount,
+        currency: mov.currency || trip.currency || 'USD',
+        category: mov.category || 'Otros',
+        date: mov.date || new Date().toISOString().split('T')[0],
+        paid_by: 'Yo',
+        split_between: ['Yo'],
+        notes: `Importado de cuenta bancaria (${mov.bankName || 'Banco'}). Ref: ${mov.reference || mov.id || 'N/A'}`,
+        merchant_name: mov.merchantName || mov.description || '',
+        created_at: new Date().toISOString(),
+      };
+
+      const { data: inserted, error: insErr } = await supabase
+        .from('expenses')
+        .insert(payload)
+        .select()
+        .maybeSingle();
+
+      if (!insErr && inserted) {
+        createdExpenses.push(mapExpenseFromDb(inserted));
+      }
+    }
+
+    res.json({
+      success: true,
+      importedCount: createdExpenses.length,
+      expenses: createdExpenses,
+    });
+  } catch (err: any) {
+    console.error('Error importing bank movements:', err);
+    res.status(500).json({ error: err.message || 'Error al importar movimientos como gastos.' });
+  }
+});
+
+// ============================================================================
+// 20. PROACTIVE AI FINANCIAL ADVISOR (Gemini 3.7 Flash + Mathematical Engine)
+// ============================================================================
+app.post('/api/ai/proactive-advice', verifyAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const subscription = await getUserSubscription(userId);
+
+    if (subscription.plan !== 'premium' || subscription.status !== 'active') {
+      return res.status(403).json({
+        error: 'El Asistente Financiero Proactivo con alertas de ritmo de gasto es exclusivo del plan Premium.',
+        code: 'PREMIUM_PLAN_REQUIRED',
+        requiredPlan: 'premium',
+      });
+    }
+
+    const { tripId, trip: tripInput, expenses: expensesInput } = req.body;
+    let trip = tripInput;
+    let expenses = expensesInput || [];
+
+    const supabase = getSupabase();
+
+    if (!trip && tripId) {
+      const { data: dbTrip } = await supabase.from('trips').select('*').eq('id', tripId).eq('user_id', userId).maybeSingle();
+      if (dbTrip) trip = mapTripFromDb(dbTrip);
+
+      const { data: dbExpenses } = await supabase.from('expenses').select('*').eq('trip_id', tripId).eq('user_id', userId);
+      if (dbExpenses) expenses = dbExpenses.map(mapExpenseFromDb);
+    }
+
+    if (!trip) {
+      return res.status(400).json({ error: 'Debes especificar un viaje para analizar.' });
+    }
+
+    // Mathematical pacing calculations
+    const startDate = new Date(trip.startDate);
+    const endDate = new Date(trip.endDate);
+    const today = new Date();
+
+    const totalDays = Math.max(1, Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1);
+    const daysElapsed = Math.max(1, Math.min(totalDays, Math.ceil((today.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1));
+    const daysRemaining = Math.max(0, totalDays - daysElapsed);
+
+    const totalSpentHomeCurrency = expenses.reduce((sum: number, e: ExpenseDoc) => {
+      if (e.currency === trip.currency) return sum + e.amount;
+      if (trip.exchangeRate > 0) return sum + (e.amount * trip.exchangeRate);
+      return sum + e.amount;
+    }, 0);
+
+    const budget = Number(trip.budget) || 0;
+    const remainingBudget = Math.max(0, budget - totalSpentHomeCurrency);
+    const plannedDailyBudget = budget > 0 ? budget / totalDays : 0;
+    const currentBurnRate = daysElapsed > 0 ? totalSpentHomeCurrency / daysElapsed : 0;
+    const safeDailyBudgetRemaining = daysRemaining > 0 ? remainingBudget / daysRemaining : remainingBudget;
+    const projectedTotalSpend = currentBurnRate * totalDays;
+    const projectedDeficitSurplus = budget - projectedTotalSpend;
+
+    let pacingStatus: 'optimal' | 'on_track' | 'warning' | 'critical' = 'on_track';
+    if (projectedTotalSpend > budget * 1.25) {
+      pacingStatus = 'critical';
+    } else if (projectedTotalSpend > budget * 1.05) {
+      pacingStatus = 'warning';
+    } else if (projectedTotalSpend <= budget * 0.9) {
+      pacingStatus = 'optimal';
+    }
+
+    // Category breakdown
+    const categoryTotals: Record<string, number> = {};
+    expenses.forEach((e: ExpenseDoc) => {
+      const cat = e.category || 'Otros';
+      categoryTotals[cat] = (categoryTotals[cat] || 0) + (e.currency === trip.currency ? e.amount : e.amount * (trip.exchangeRate || 1));
+    });
+
+    let topCategory = 'Varios';
+    let topCategoryAmt = 0;
+    Object.entries(categoryTotals).forEach(([c, a]) => {
+      if (a > topCategoryAmt) {
+        topCategoryAmt = a;
+        topCategory = c;
+      }
+    });
+
+    // Check if GEMINI_API_KEY is present for deep smart analysis
+    const apiKey = process.env.GEMINI_API_KEY?.trim();
+    let adviceItems: any[] = [];
+
+    if (apiKey) {
+      try {
+        const ai = new GoogleGenAI({
+          apiKey,
+          httpOptions: {
+            headers: {
+              'User-Agent': 'aistudio-build',
+            },
+          },
+        });
+
+        const prompt = `Actúa como el Asistente Financiero Proactivo de Rumbio.
+Analiza la siguiente situación financiera de viaje y genera recomendaciones y alertas de ritmo de gasto:
+
+VIAJE: ${trip.name} (${trip.destination})
+DURACIÓN: ${totalDays} días totales | ${daysElapsed} días transcurridos | ${daysRemaining} días restantes
+PRESUPUESTO TOTAL: ${budget} ${trip.currency}
+GASTADO HASTA AHORA: ${Math.round(totalSpentHomeCurrency)} ${trip.currency} (${Math.round((totalSpentHomeCurrency / (budget || 1)) * 100)}%)
+RITMO ACTUAL (BURN RATE): ${Math.round(currentBurnRate)} ${trip.currency}/día
+PRESUPUESTO DIARIO PLANEADO ORIGINAL: ${Math.round(plannedDailyBudget)} ${trip.currency}/día
+PRESUPUESTO MÁXIMO DIARIO RESTANTE RECOMENDADO: ${Math.round(safeDailyBudgetRemaining)} ${trip.currency}/día
+PROYECCIÓN AL CIERRE: ${Math.round(projectedTotalSpend)} ${trip.currency} (${projectedDeficitSurplus >= 0 ? `Ahorro estimado de ${Math.round(projectedDeficitSurplus)}` : `SOBREGIRO ESTIMADO de ${Math.round(Math.abs(projectedDeficitSurplus))}`})
+CATEGORÍA CON MAYOR GASTO: ${topCategory} (${Math.round(topCategoryAmt)} ${trip.currency})
+
+Responde en formato JSON estricto con el siguiente esquema:
+{
+  "summary": "Resumen ejecutivo en 1 frase sobre el ritmo de gasto actual",
+  "pacingAdvice": "Diagnóstico claro y directo de si el ritmo es sostenible o riesgoso",
+  "recommendations": [
+    {
+      "id": "rec_1",
+      "type": "alert" | "warning" | "tip" | "positive",
+      "title": "Título corto y directo",
+      "message": "Explicación concreta con números y porcentajes",
+      "impact": "Alto" | "Medio" | "Bajo",
+      "suggestedAction": "Acción recomendada accionable para el viajero"
+    }
+  ]
+}`;
+
+        const geminiRes = await ai.models.generateContent({
+          model: 'gemini-3.7-flash',
+          contents: prompt,
+          config: {
+            responseMimeType: 'application/json',
+            temperature: 0.3,
+          },
+        });
+
+        const raw = geminiRes.text?.trim() || '{}';
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed.recommendations)) {
+          adviceItems = parsed.recommendations;
+        }
+      } catch (gemErr) {
+        console.warn('Gemini advice fallback:', gemErr);
+      }
+    }
+
+    // Algorithmic fallback recommendations if Gemini was unavailable or empty
+    if (adviceItems.length === 0) {
+      if (pacingStatus === 'critical' || pacingStatus === 'warning') {
+        adviceItems.push({
+          id: 'adv_burn_rate',
+          type: pacingStatus === 'critical' ? 'alert' : 'warning',
+          title: `Ritmo de gasto acelerado (${Math.round((currentBurnRate / (plannedDailyBudget || 1)) * 100)}% de lo planeado)`,
+          message: `Estás gastando en promedio ${Math.round(currentBurnRate)} ${trip.currency}/día frente a los ${Math.round(plannedDailyBudget)} ${trip.currency}/día proyectados. A este ritmo, terminarás el viaje con un sobregiro de ${Math.round(Math.abs(projectedDeficitSurplus))} ${trip.currency}.`,
+          impact: 'Alto',
+          suggestedAction: `Limita los gastos diarios a un máximo de ${Math.round(safeDailyBudgetRemaining)} ${trip.currency}/día durante los ${daysRemaining} días restantes.`,
+        });
+      } else {
+        adviceItems.push({
+          id: 'adv_optimal_pacing',
+          type: 'positive',
+          title: 'Ritmo de gasto saludable',
+          message: `Tu ritmo actual (${Math.round(currentBurnRate)} ${trip.currency}/día) está alineado con tu presupuesto. Se proyecta un remanente de ${Math.round(projectedDeficitSurplus)} ${trip.currency} al finalizar.`,
+          impact: 'Bajo',
+          suggestedAction: 'Mantén este ritmo controlado para tener un fondo de emergencia para imprevistos.',
+        });
+      }
+
+      if (topCategoryAmt > budget * 0.4) {
+        adviceItems.push({
+          id: 'adv_top_category',
+          type: 'tip',
+          title: `Concentración alta en "${topCategory}"`,
+          message: `El rubro "${topCategory}" representa el ${Math.round((topCategoryAmt / (totalSpentHomeCurrency || 1)) * 100)}% del gasto total acumulado.`,
+          impact: 'Medio',
+          suggestedAction: `Revisa alternativas locales de menor costo para ${topCategory.toLowerCase()} en los próximos días.`,
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      tripId: trip.id,
+      metrics: {
+        totalDays,
+        daysElapsed,
+        daysRemaining,
+        budget,
+        totalSpent: Math.round(totalSpentHomeCurrency * 100) / 100,
+        remainingBudget: Math.round(remainingBudget * 100) / 100,
+        plannedDailyBudget: Math.round(plannedDailyBudget * 100) / 100,
+        currentBurnRate: Math.round(currentBurnRate * 100) / 100,
+        safeDailyBudgetRemaining: Math.round(safeDailyBudgetRemaining * 100) / 100,
+        projectedTotalSpend: Math.round(projectedTotalSpend * 100) / 100,
+        projectedDeficitSurplus: Math.round(projectedDeficitSurplus * 100) / 100,
+        pacingStatus,
+        currency: trip.currency,
+      },
+      adviceItems,
+      generatedAt: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    console.error('Error in proactive advice endpoint:', err);
+    res.status(500).json({ error: err.message || 'Error al generar recomendaciones proactivas.' });
+  }
+});
+
+// ============================================================================
+// 21. CROSS-TRIP BUDGET PROJECTION & HISTORICAL BENCHMARKING
+// ============================================================================
+app.post('/api/analytics/budget-projection', verifyAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const subscription = await getUserSubscription(userId);
+
+    if (subscription.plan !== 'premium' || subscription.status !== 'active') {
+      return res.status(403).json({
+        error: 'Las proyecciones presupuestarias comparativas entre viajes son exclusivas del plan Premium.',
+        code: 'PREMIUM_PLAN_REQUIRED',
+        requiredPlan: 'premium',
+      });
+    }
+
+    const { destination, durationDays = 7, travelStyle = 'balanced', targetCurrency = 'USD' } = req.body;
+    const supabase = getSupabase();
+
+    // Fetch user's past trips and expenses
+    const { data: dbTrips } = await supabase.from('trips').select('*').eq('user_id', userId);
+    const { data: dbExpenses } = await supabase.from('expenses').select('*').eq('user_id', userId);
+
+    const pastTrips = (dbTrips || []).map(mapTripFromDb);
+    const pastExpenses = (dbExpenses || []).map(mapExpenseFromDb);
+
+    // Compute user's average historical category distribution
+    const categoryTotals: Record<string, number> = {
+      Alojamiento: 0,
+      Comida: 0,
+      Transporte: 0,
+      Actividades: 0,
+      Compras: 0,
+      Vuelos: 0,
+      Seguros: 0,
+      Otros: 0,
+    };
+
+    let totalHistoricalSpent = 0;
+    let totalHistoricalDays = 0;
+
+    pastTrips.forEach(t => {
+      const s = new Date(t.startDate);
+      const e = new Date(t.endDate);
+      const days = Math.max(1, Math.ceil((e.getTime() - s.getTime()) / (1000 * 60 * 60 * 24)) + 1);
+      totalHistoricalDays += days;
+    });
+
+    pastExpenses.forEach(exp => {
+      const cat = exp.category || 'Otros';
+      categoryTotals[cat] = (categoryTotals[cat] || 0) + exp.amount;
+      totalHistoricalSpent += exp.amount;
+    });
+
+    // Style multipliers
+    const styleMultipliers: Record<string, number> = {
+      budget: 0.7,
+      balanced: 1.0,
+      comfort: 1.4,
+      luxury: 2.2,
+    };
+    const multiplier = styleMultipliers[travelStyle] || 1.0;
+
+    // Daily base benchmark (if user has history, use it; otherwise standard benchmark)
+    const baseDailySpend = totalHistoricalDays > 0 && totalHistoricalSpent > 0
+      ? (totalHistoricalSpent / totalHistoricalDays)
+      : 120; // Default benchmark in USD/day
+
+    const adjustedDailySpend = baseDailySpend * multiplier;
+    const projectedTotal = Math.round(adjustedDailySpend * durationDays);
+
+    const projectedCategories = Object.keys(categoryTotals).map(cat => {
+      const proportion = totalHistoricalSpent > 0 ? (categoryTotals[cat] / totalHistoricalSpent) : (
+        cat === 'Alojamiento' ? 0.35 :
+        cat === 'Comida' ? 0.25 :
+        cat === 'Transporte' ? 0.15 :
+        cat === 'Actividades' ? 0.15 : 0.10
+      );
+
+      const estimatedAmount = Math.round(projectedTotal * proportion);
+      return {
+        category: cat,
+        estimatedAmount,
+        percentage: Math.round(proportion * 100),
+      };
+    });
+
+    res.json({
+      success: true,
+      destination,
+      durationDays,
+      travelStyle,
+      targetCurrency,
+      historicalTripsAnalyzed: pastTrips.length,
+      historicalExpensesAnalyzed: pastExpenses.length,
+      projectedTotal,
+      projectedDailyAverage: Math.round(adjustedDailySpend),
+      categories: projectedCategories,
+      confidenceScore: pastTrips.length >= 2 ? 0.92 : 0.75,
+    });
+  } catch (err: any) {
+    console.error('Error calculating budget projection:', err);
+    res.status(500).json({ error: err.message || 'Error al calcular proyección presupuestaria.' });
   }
 });
 

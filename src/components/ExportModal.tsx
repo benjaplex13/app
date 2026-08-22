@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { FileText, Download, Sparkles, X, FileSpreadsheet, Braces, CheckCircle2, Loader2, Calendar, MapPin } from 'lucide-react';
+import { FileText, Download, Sparkles, X, FileSpreadsheet, Braces, CheckCircle2, Loader2, Calendar, MapPin, Briefcase } from 'lucide-react';
 import { Trip, Expense, User } from '../types';
-import { exportTripToProfessionalPDF, downloadStructuredJSON } from '../utils/exportEngine';
+import { exportTripToProfessionalPDF, exportBusinessTripExpenseReportPDF, downloadStructuredJSON } from '../utils/exportEngine';
 
 interface ExportModalProps {
   isOpen: boolean;
@@ -24,6 +24,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 }) => {
   const [selectedTripId, setSelectedTripId] = useState<string>(activeTripId || (trips[0]?.id || ''));
   const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [isExportingBusinessPdf, setIsExportingBusinessPdf] = useState(false);
   const [exportProgressText, setExportProgressText] = useState('');
   const [isExportingJson, setIsExportingJson] = useState(false);
 
@@ -59,6 +60,30 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     } finally {
       setIsExportingPdf(false);
       setExportProgressText('');
+    }
+  };
+
+  const handleExportBusinessPdf = async () => {
+    if (!currentSelectedTrip) {
+      onShowToast('Selecciona un viaje para generar el informe corporativo.', 'error');
+      return;
+    }
+
+    try {
+      setIsExportingBusinessPdf(true);
+      await exportBusinessTripExpenseReportPDF({
+        trip: currentSelectedTrip,
+        expenses: tripExpenses,
+        user: currentUser,
+      });
+
+      onShowToast('Planilla oficial de rendición de gastos descargada con éxito.', 'success');
+      onClose();
+    } catch (err: any) {
+      console.error('Error exporting business PDF:', err);
+      onShowToast('Error al generar la rendición corporativa.', 'error');
+    } finally {
+      setIsExportingBusinessPdf(false);
     }
   };
 
@@ -198,6 +223,44 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                 <>
                   <Download className="w-4 h-4" />
                   <span>Descargar PDF</span>
+                </>
+              )}
+            </button>
+          </div>
+
+          {/* Format 1b: Corporate Business Trip Expense Reimbursement PDF (Premium) */}
+          <div className="p-4 rounded-2xl bg-gradient-to-r from-emerald-950/40 to-slate-900 border border-emerald-500/30 hover:border-emerald-500/60 transition group flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-start space-x-3.5">
+              <div className="p-3 rounded-2xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 mt-0.5">
+                <Briefcase className="w-6 h-6" />
+              </div>
+              <div className="space-y-1">
+                <div className="flex items-center space-x-2">
+                  <span className="font-bold text-white text-sm">Planilla Oficial de Rendición de Negocios</span>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                    Modo Empresa
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400 leading-relaxed max-w-sm">
+                  Documento de rendición corporativa con desglose de facturas/boletas, RUT/Tax ID, centros de costos y casillas de firma.
+                </p>
+              </div>
+            </div>
+
+            <button
+              onClick={handleExportBusinessPdf}
+              disabled={isExportingBusinessPdf || trips.length === 0}
+              className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs transition shadow-lg shadow-emerald-600/25 flex items-center justify-center space-x-2 disabled:opacity-50 shrink-0"
+            >
+              {isExportingBusinessPdf ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin text-white" />
+                  <span>Generando...</span>
+                </>
+              ) : (
+                <>
+                  <Download className="w-4 h-4" />
+                  <span>Descargar Rendición</span>
                 </>
               )}
             </button>

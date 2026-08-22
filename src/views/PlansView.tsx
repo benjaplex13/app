@@ -23,7 +23,7 @@ import { CheckoutModal, DEMO_AUTO_ACTIVATE_MODE } from '../components/CheckoutMo
 interface PlansViewProps {
   currentUser: User;
   subscription: UserSubscription | null;
-  onRefreshSubscription: () => Promise<any>;
+  onRefreshSubscription: (updatedSub?: UserSubscription) => Promise<any>;
   onTriggerToast: (message: string, type?: 'success' | 'error' | 'warning' | 'info') => void;
 }
 

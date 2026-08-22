@@ -386,6 +386,246 @@ export async function exportTripToProfessionalPDF({
   doc.save(`Rumbio_Reporte_${cleanName}_${new Date().toISOString().split('T')[0]}.pdf`);
 }
 
+export interface ExportBusinessTripPdfOptions {
+  trip: Trip;
+  expenses: Expense[];
+  user: User;
+  metadata?: any;
+  onProgress?: (step: string) => void;
+}
+
+/**
+ * Builds and downloads an Official Corporate Expense Reimbursement PDF Report (Business Trip Mode).
+ */
+export async function exportBusinessTripExpenseReportPDF({
+  trip,
+  expenses,
+  user,
+  metadata,
+  onProgress,
+}: ExportBusinessTripPdfOptions): Promise<void> {
+  onProgress?.('Generando planilla corporativa de rendición...');
+
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: 'a4',
+  });
+
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const margin = 14;
+  let currentY = 14;
+
+  const primaryNavy = [15, 23, 42]; // #0f172a
+  const corporateTeal = [13, 148, 136]; // #0d9488
+  const textDark = [15, 23, 42];
+  const textMuted = [100, 116, 139];
+  const cardBg = [248, 250, 252];
+
+  const meta = metadata || trip.businessMetadata || {
+    companyName: 'Empresa',
+    taxId: 'N/A',
+    employeeName: user.name,
+    costCenter: 'General',
+    projectCode: 'N/A',
+    approverName: 'Gerencia de Finanzas',
+    travelPurpose: 'Comisión de servicios',
+  };
+
+  // 1. CORPORATE HEADER BANNER
+  doc.setFillColor(primaryNavy[0], primaryNavy[1], primaryNavy[2]);
+  doc.roundedRect(margin, currentY, pageWidth - margin * 2, 28, 2, 2, 'F');
+
+  doc.setTextColor(255, 255, 255);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(14);
+  doc.text((meta.companyName || 'EMPRESA').toUpperCase(), margin + 6, currentY + 10);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.setTextColor(204, 251, 241);
+  doc.text(`RUT / TAX ID: ${meta.taxId || 'N/A'}   |   CENTRO DE COSTOS: ${meta.costCenter || 'GENERAL'}`, margin + 6, currentY + 16);
+  doc.text(`PLANILLA OFICIAL DE RENDICIÓN DE GASTOS DE VIAJE`, margin + 6, currentY + 22);
+
+  // Badge on the right
+  doc.setFillColor(13, 148, 136);
+  doc.roundedRect(pageWidth - margin - 48, currentY + 6, 42, 16, 2, 2, 'F');
+  doc.setFontSize(7.5);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(255, 255, 255);
+  doc.text('DOCUMENTO OFICIAL', pageWidth - margin - 44, currentY + 12);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(6.5);
+  doc.setTextColor(240, 253, 250);
+  doc.text(`Folio: RD-${Date.now().toString().slice(-6)}`, pageWidth - margin - 44, currentY + 18);
+
+  currentY += 34;
+
+  // 2. EMPLOYEE & TRAVEL DETAILS CARD
+  doc.setFillColor(cardBg[0], cardBg[1], cardBg[2]);
+  doc.setDrawColor(226, 232, 240);
+  doc.setLineWidth(0.3);
+  doc.roundedRect(margin, currentY, pageWidth - margin * 2, 24, 2, 2, 'FD');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.setTextColor(primaryNavy[0], primaryNavy[1], primaryNavy[2]);
+  doc.text('DATOS DEL VIAJERO Y COMISIÓN', margin + 4, currentY + 5.5);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.setTextColor(textDark[0], textDark[1], textDark[2]);
+  doc.text(`Trabajador: ${meta.employeeName || user.name}`, margin + 4, currentY + 11);
+  doc.text(`Destino: ${trip.destination || trip.name}`, margin + 4, currentY + 16);
+  doc.text(`Periodo: ${trip.startDate || 'N/A'} al ${trip.endDate || 'N/A'}`, margin + 4, currentY + 21);
+
+  const col2X = margin + (pageWidth - margin * 2) / 2;
+  doc.text(`Email: ${user.email}`, col2X, currentY + 11);
+  doc.text(`Motivo: ${meta.travelPurpose || 'Comisión de servicio'}`, col2X, currentY + 16);
+  doc.text(`Aprobador: ${meta.approverName || 'Jefatura'}`, col2X, currentY + 21);
+
+  currentY += 30;
+
+  // 3. FINANCIAL TOTALS & TAX DEDUCTIBILITY
+  const totalExpensesHome = expenses.reduce((sum, e) => sum + convertToHomeCurrency(e.amount, e.currency, trip, user.homeCurrency), 0);
+  const deductibleExpenses = expenses.filter(e => e.isTaxDeductible !== false);
+  const totalDeductibleHome = deductibleExpenses.reduce((sum, e) => sum + convertToHomeCurrency(e.amount, e.currency, trip, user.homeCurrency), 0);
+
+  const cardWidth = (pageWidth - margin * 2 - 6) / 3;
+  const cardHeight = 16;
+
+  const kpis = [
+    { title: 'TOTAL A REEMBOLSAR', val: formatMoney(totalExpensesHome, user.homeCurrency), sub: `${expenses.length} comprobantes` },
+    { title: 'GASTO CON FACTURA/BOLETA', val: formatMoney(totalDeductibleHome, user.homeCurrency), sub: `${deductibleExpenses.length} facturas deducibles` },
+    { title: 'MONEDA DE LIQUIDACIÓN', val: user.homeCurrency, sub: `Cambio aplicado: 1 ${trip.currency} = ${trip.exchangeRate || 1} ${user.homeCurrency}` },
+  ];
+
+  kpis.forEach((kpi, idx) => {
+    const cardX = margin + idx * (cardWidth + 3);
+    doc.setFillColor(cardBg[0], cardBg[1], cardBg[2]);
+    doc.setDrawColor(226, 232, 240);
+    doc.setLineWidth(0.3);
+    doc.roundedRect(cardX, currentY, cardWidth, cardHeight, 2, 2, 'FD');
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(6);
+    doc.setTextColor(textMuted[0], textMuted[1], textMuted[2]);
+    doc.text(kpi.title, cardX + 3, currentY + 4.5);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.setTextColor(corporateTeal[0], corporateTeal[1], corporateTeal[2]);
+    doc.text(kpi.val, cardX + 3, currentY + 10);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6.5);
+    doc.setTextColor(textMuted[0], textMuted[1], textMuted[2]);
+    doc.text(kpi.sub, cardX + 3, currentY + 14);
+  });
+
+  currentY += cardHeight + 8;
+
+  // 4. DETAILED EXPENSES & INVOICES TABLE
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.setTextColor(textDark[0], textDark[1], textDark[2]);
+  doc.text('Detalle de Comprobantes, Facturas y Boletas', margin, currentY);
+  currentY += 3;
+
+  const sortedExpenses = [...expenses].sort((a, b) => (b.date > a.date ? 1 : -1));
+  const expenseRows = sortedExpenses.map((e, index) => {
+    const homeVal = convertToHomeCurrency(e.amount, e.currency, trip, user.homeCurrency);
+    const invoiceNum = e.invoiceNumber || (e.isTaxDeductible ? `FAC-${index + 1}` : 'Boleta');
+    const merchant = e.merchantName || e.title || 'Comercio';
+
+    return [
+      e.date || '-',
+      invoiceNum,
+      merchant,
+      e.category || 'Otros',
+      e.isTaxDeductible !== false ? 'Sí (Factura)' : 'No',
+      formatMoney(e.amount, e.currency),
+      formatMoney(homeVal, user.homeCurrency),
+    ];
+  });
+
+  autoTable(doc, {
+    startY: currentY,
+    margin: { left: margin, right: margin },
+    head: [['Fecha', 'Nº Doc / Factura', 'Comercio / Proveedor', 'Categoría', 'Deducible', 'Monto Doc.', `Reembolso (${user.homeCurrency})`]],
+    body: expenseRows.length > 0 ? expenseRows : [['-', '-', 'Sin gastos registrados', '-', '-', '-', '-']],
+    theme: 'striped',
+    headStyles: {
+      fillColor: [15, 23, 42],
+      textColor: [255, 255, 255],
+      fontSize: 7,
+      fontStyle: 'bold',
+      cellPadding: 2,
+    },
+    bodyStyles: {
+      fontSize: 7,
+      textColor: [30, 41, 59],
+      cellPadding: 2,
+    },
+  });
+
+  // @ts-ignore
+  currentY = (doc as any).lastAutoTable.finalY + 12;
+
+  // Check page break for signature section
+  if (currentY + 35 > pageHeight - 18) {
+    doc.addPage();
+    currentY = 20;
+  }
+
+  // 5. SIGNATURES & APPROVAL SECTION
+  const sigBoxWidth = (pageWidth - margin * 2 - 10) / 2;
+  
+  // Signature 1: Employee
+  doc.setDrawColor(148, 163, 184);
+  doc.setLineWidth(0.4);
+  doc.line(margin + 10, currentY + 18, margin + sigBoxWidth - 10, currentY + 18);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.5);
+  doc.setTextColor(textDark[0], textDark[1], textDark[2]);
+  doc.text('Firma del Trabajador / Rendidor', margin + 14, currentY + 22);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(6.5);
+  doc.setTextColor(textMuted[0], textMuted[1], textMuted[2]);
+  doc.text(meta.employeeName || user.name, margin + 14, currentY + 26);
+
+  // Signature 2: Approver / Finance
+  const sig2X = margin + sigBoxWidth + 10;
+  doc.line(sig2X + 10, currentY + 18, sig2X + sigBoxWidth - 10, currentY + 18);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.5);
+  doc.setTextColor(textDark[0], textDark[1], textDark[2]);
+  doc.text('Aprobado por (Jefatura / Finanzas)', sig2X + 14, currentY + 22);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(6.5);
+  doc.setTextColor(textMuted[0], textMuted[1], textMuted[2]);
+  doc.text(meta.approverName || 'Gerencia de Finanzas', sig2X + 14, currentY + 26);
+
+  // 6. FOOTER TO ALL PAGES
+  const totalPages = doc.getNumberOfPages();
+  for (let i = 1; i <= totalPages; i++) {
+    doc.setPage(i);
+    doc.setDrawColor(226, 232, 240);
+    doc.setLineWidth(0.3);
+    doc.line(margin, pageHeight - 12, pageWidth - margin, pageHeight - 12);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6.5);
+    doc.setTextColor(148, 163, 184);
+    doc.text('Rumbio Corporate Expense Engine — Documento válido para rendición tributaria interna', margin, pageHeight - 7);
+    doc.text(`Página ${i} de ${totalPages}`, pageWidth - margin - 18, pageHeight - 7);
+  }
+
+  const cleanName = (trip.destination || trip.name).replace(/[^a-zA-Z0-9_-]/g, '_');
+  doc.save(`Rumbio_Rendicion_Negocios_${cleanName}_${new Date().toISOString().split('T')[0]}.pdf`);
+}
+
 /**
  * Builds a structured, rich, and highly readable JSON export of user data.
  */

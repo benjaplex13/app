@@ -22,7 +22,7 @@ import {
   ArrowDownRight,
   ArrowUpRight
 } from 'lucide-react';
-import { Trip, Expense, User, UserSubscription } from '../types';
+import { Trip, Expense, User, UserSubscription, CurrencyCode } from '../types';
 import { calculateSplitDebts, formatMoney, convertToHomeCurrency } from '../utils/finance';
 
 interface SplitViewProps {
@@ -49,11 +49,13 @@ export const SplitView: React.FC<SplitViewProps> = ({
   const [copied, setCopied] = useState(false);
   const [newMemberName, setNewMemberName] = useState('');
   const [showExplainGuide, setShowExplainGuide] = useState(false);
+  const [settlementCurrency, setSettlementCurrency] = useState<CurrencyCode>(currentUser.homeCurrency);
 
   const canSplit = userSubscription?.limits.canSplitExpenses ?? true;
   const canAutoSettle = userSubscription?.limits.canAutoSettleDebts ?? false;
+  const isPremium = userSubscription?.plan === 'premium';
 
-  const { settlements, balances, totalSpent } = calculateSplitDebts(expenses, trip, currentUser.homeCurrency);
+  const { settlements, balances, totalSpent } = calculateSplitDebts(expenses, trip, settlementCurrency);
 
   // Calculate detailed stats per member: Total Paid vs Total Consumed (Owed)
   const memberStats: Record<string, { paid: number; consumed: number }> = {};
@@ -70,7 +72,7 @@ export const SplitView: React.FC<SplitViewProps> = ({
   });
 
   expenses.forEach(e => {
-    const cost = convertToHomeCurrency(e.amount, e.currency, trip, currentUser.homeCurrency);
+    const cost = convertToHomeCurrency(e.amount, e.currency, trip, settlementCurrency);
     const payer = e.paidBy || 'Yo';
     const splitWith = e.splitBetween && e.splitBetween.length > 0 ? e.splitBetween : ['Yo'];
 
@@ -361,13 +363,44 @@ export const SplitView: React.FC<SplitViewProps> = ({
         </div>
       </div>
 
+      {/* Multi-Currency Settlement Toolbar (Premium) */}
+      <div className="bg-slate-900/80 p-4 rounded-2xl border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex items-center space-x-2">
+          <Sparkles className="w-4 h-4 text-cyan-400" />
+          <span className="text-xs font-bold text-white">Liquidación Multi-Moneda:</span>
+          <span className="text-xs text-slate-400">Ver saldos y deudas convertidos a:</span>
+        </div>
+
+        <div className="flex items-center space-x-2">
+          {[
+            { code: currentUser.homeCurrency, label: `Mi Moneda (${currentUser.homeCurrency})` },
+            { code: trip.currency, label: `Moneda Destino (${trip.currency})` },
+            { code: 'USD', label: 'Dólares (USD)' },
+            { code: 'EUR', label: 'Euros (EUR)' },
+          ].map((curr) => (
+            <button
+              key={curr.code}
+              type="button"
+              onClick={() => setSettlementCurrency(curr.code as CurrencyCode)}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition border ${
+                settlementCurrency === curr.code
+                  ? 'bg-blue-600 border-cyan-400 text-white shadow-md'
+                  : 'bg-slate-950 border-white/10 text-slate-400 hover:text-white'
+              }`}
+            >
+              {curr.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* Grid: Settlements on Left, Balances on Right */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         {/* Settlements (Quién le debe a quién) */}
         <div className="bg-white/5 p-8 rounded-[32px] border border-white/5 flex flex-col justify-between">
           <div>
             <h3 className="text-sm font-bold uppercase tracking-widest text-slate-400 mb-6 flex items-center gap-2 font-display">
-              <ArrowLeftRight className="w-4 h-4 text-blue-400" /> Liquidación Óptima de Deudas
+              <ArrowLeftRight className="w-4 h-4 text-blue-400" /> Liquidación Óptima de Deudas ({settlementCurrency})
             </h3>
 
             {settlements.length === 0 ? (
@@ -403,7 +436,7 @@ export const SplitView: React.FC<SplitViewProps> = ({
 
                     <div className="text-right">
                       <span className="text-sm font-mono font-black text-cyan-400 block">
-                        {formatMoney(s.amount, currentUser.homeCurrency)}
+                        {formatMoney(s.amount, settlementCurrency)}
                       </span>
                       <span className="text-[10px] text-slate-500">Pago pendiente</span>
                     </div>
@@ -418,7 +451,7 @@ export const SplitView: React.FC<SplitViewProps> = ({
         <div className="bg-white/5 p-8 rounded-[32px] border border-white/5 flex flex-col justify-between">
           <div>
             <h3 className="text-sm font-bold uppercase tracking-widest text-slate-400 mb-6 flex items-center gap-2 font-display">
-              <Wallet className="w-4 h-4 text-blue-400" /> Balance Neto por Integrante
+              <Wallet className="w-4 h-4 text-blue-400" /> Balance Neto por Integrante ({settlementCurrency})
             </h3>
 
             <div className="space-y-3">
@@ -443,7 +476,7 @@ export const SplitView: React.FC<SplitViewProps> = ({
                           {member === 'Yo' ? `Yo (${currentUser.name})` : member}
                         </span>
                         <span className="text-[10px] text-slate-400 block">
-                          Pagó: <b className="text-slate-300 font-mono">{formatMoney(stats.paid, currentUser.homeCurrency)}</b> • Consumo: <b className="text-slate-300 font-mono">{formatMoney(stats.consumed, currentUser.homeCurrency)}</b>
+                          Pagó: <b className="text-slate-300 font-mono">{formatMoney(stats.paid, settlementCurrency)}</b> • Consumo: <b className="text-slate-300 font-mono">{formatMoney(stats.consumed, settlementCurrency)}</b>
                         </span>
                       </div>
                     </div>
@@ -455,10 +488,10 @@ export const SplitView: React.FC<SplitViewProps> = ({
                         }`}
                       >
                         {isPositive
-                          ? `+${formatMoney(rounded, currentUser.homeCurrency)}`
+                          ? `+${formatMoney(rounded, settlementCurrency)}`
                           : isNegative
-                          ? formatMoney(rounded, currentUser.homeCurrency)
-                          : formatMoney(0, currentUser.homeCurrency)}
+                          ? formatMoney(rounded, settlementCurrency)
+                          : formatMoney(0, settlementCurrency)}
                       </span>
                       <span className="text-[10px] text-slate-500 font-medium">
                         {isPositive ? 'Le deben' : isNegative ? 'Debe' : 'Equilibrado'}

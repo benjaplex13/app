@@ -14,9 +14,12 @@ import {
   Sparkles,
   ArrowRightLeft,
   Receipt,
-  ArrowRight
+  ArrowRight,
+  Building2,
+  Briefcase,
+  BarChart3
 } from 'lucide-react';
-import { Trip, Expense, User } from '../types';
+import { Trip, Expense, User, UserSubscription } from '../types';
 import { CURRENCIES, CATEGORY_DETAILS } from '../data/currencies';
 import { 
   convertToHomeCurrency, 
@@ -24,29 +27,42 @@ import {
   getCategoryBreakdown, 
   getDailySpending 
 } from '../utils/finance';
+import { ProactiveAdvisorBanner } from '../components/ProactiveAdvisorBanner';
 
 interface OverviewViewProps {
   trip: Trip;
   expenses: Expense[];
   currentUser: User;
+  subscription?: UserSubscription | null;
   onOpenExpenseModal: () => void;
   onOpenEditTripModal: () => void;
   onNavigateToExpenses?: () => void;
   onEditExpense?: (expense: Expense) => void;
   onExportCSV: () => void;
   onOpenExportModal?: () => void;
+  onOpenBankSyncModal?: () => void;
+  onOpenBusinessTripModal?: () => void;
+  onOpenAnalyticsModal?: () => void;
+  onOpenUpgradeGate?: (opts: any) => void;
+  onShowToast?: (msg: string, type: 'success' | 'error' | 'warning' | 'info') => void;
 }
 
 export const OverviewView: React.FC<OverviewViewProps> = ({
   trip,
   expenses,
   currentUser,
+  subscription,
   onOpenExpenseModal,
   onOpenEditTripModal,
   onNavigateToExpenses,
   onEditExpense,
   onExportCSV,
   onOpenExportModal,
+  onOpenBankSyncModal,
+  onOpenBusinessTripModal,
+  onOpenAnalyticsModal,
+  onOpenUpgradeGate,
+  onShowToast,
 }) => {
   // Calculate total spent in home currency
   const totalSpentHome = expenses.reduce((acc, curr) => {
@@ -80,7 +96,17 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
     .slice(0, 5);
 
   return (
-    <div className="space-y-8 animate-in fade-in duration-300">
+    <div className="space-y-6 animate-in fade-in duration-300">
+      {/* 1. Proactive Financial Advisor Banner (Premium Feature 5) */}
+      <ProactiveAdvisorBanner
+        trip={trip}
+        expenses={expenses}
+        currentUser={currentUser}
+        subscription={subscription || null}
+        onOpenPlans={() => onOpenUpgradeGate?.({ requiredPlan: 'premium', title: 'Asistente Financiero Proactivo' })}
+        onShowToast={onShowToast || (() => {})}
+      />
+
       {/* Flight Pass / Header Card */}
       <div className="relative rounded-[32px] overflow-hidden p-6 sm:p-10 flex flex-col justify-end border border-white/5 shadow-2xl">
         <div className="absolute inset-0 bg-gradient-to-br from-blue-900/40 via-[#050811] to-[#050811] z-0"></div>
@@ -110,6 +136,43 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
               <PlusCircle className="w-4 h-4" />
               <span>+ Registrar Gasto</span>
             </button>
+
+            {/* Premium Button: Bank Sync */}
+            {onOpenBankSyncModal && (
+              <button
+                onClick={onOpenBankSyncModal}
+                className="bg-cyan-950/60 hover:bg-cyan-900/80 text-cyan-300 text-xs font-semibold px-4 py-3 rounded-2xl border border-cyan-500/30 flex items-center space-x-1.5 transition shadow-md"
+                title="Sincronizar movimientos bancarios (Open Banking)"
+              >
+                <Building2 className="w-4 h-4 text-cyan-400" />
+                <span>Banco</span>
+              </button>
+            )}
+
+            {/* Premium Button: Business Trip Mode */}
+            {onOpenBusinessTripModal && (
+              <button
+                onClick={onOpenBusinessTripModal}
+                className="bg-emerald-950/60 hover:bg-emerald-900/80 text-emerald-300 text-xs font-semibold px-4 py-3 rounded-2xl border border-emerald-500/30 flex items-center space-x-1.5 transition shadow-md"
+                title="Modo Viaje de Negocios y Rendición"
+              >
+                <Briefcase className="w-4 h-4 text-emerald-400" />
+                <span>Negocios</span>
+              </button>
+            )}
+
+            {/* Premium Button: Cross-Trip Analytics */}
+            {onOpenAnalyticsModal && (
+              <button
+                onClick={onOpenAnalyticsModal}
+                className="bg-indigo-950/60 hover:bg-indigo-900/80 text-indigo-300 text-xs font-semibold px-4 py-3 rounded-2xl border border-indigo-500/30 flex items-center space-x-1.5 transition shadow-md"
+                title="Reportes comparativos y proyecciones IA"
+              >
+                <BarChart3 className="w-4 h-4 text-indigo-400" />
+                <span>Analítica IA</span>
+              </button>
+            )}
+
             <button
               onClick={onOpenExportModal || onExportCSV}
               className="bg-slate-900/80 hover:bg-slate-800 text-slate-200 text-xs font-semibold px-4 py-3 rounded-2xl border border-white/10 flex items-center space-x-2 transition shadow-md"
@@ -118,6 +181,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
               <Download className="w-4 h-4 text-blue-400" />
               <span>Exportar</span>
             </button>
+
             <button
               onClick={onOpenEditTripModal}
               className="bg-slate-900/60 hover:bg-slate-800 text-slate-300 hover:text-white p-3 rounded-2xl border border-white/10 transition"
@@ -397,7 +461,11 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
               return (
                 <div
                   key={exp.id}
-                  className="py-3.5 flex items-center justify-between hover:bg-white/[0.02] px-2 rounded-xl transition"
+                  onClick={() => onEditExpense?.(exp)}
+                  className={`py-3.5 flex items-center justify-between px-2 rounded-xl transition ${
+                    onEditExpense ? 'hover:bg-white/5 cursor-pointer active:scale-[0.99]' : 'hover:bg-white/[0.02]'
+                  }`}
+                  title={onEditExpense ? 'Clic para ver o editar gasto' : undefined}
                 >
                   <div className="flex items-center space-x-3">
                     <span className={`text-[10px] font-bold px-2.5 py-1 rounded-lg ${catDetails.bg} ${catDetails.color}`}>

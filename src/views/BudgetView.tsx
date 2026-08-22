@@ -10,24 +10,29 @@ import {
   Layers,
   Sparkles
 } from 'lucide-react';
-import { Trip, Expense, User, ExpenseCategory } from '../types';
+import { Trip, Expense, User, ExpenseCategory, UserSubscription } from '../types';
 import { ALL_CATEGORIES, CATEGORY_DETAILS } from '../data/currencies';
 import { convertToHomeCurrency, formatMoney, getCategoryBreakdown } from '../utils/finance';
+import { BudgetAlertsWidget } from '../components/BudgetAlertsWidget';
 
 interface BudgetViewProps {
   trip: Trip;
   expenses: Expense[];
   currentUser: User;
+  subscription: UserSubscription | null;
   onUpdateTripPlans: (plans: Trip['plans']) => void;
-  onShowToast: (msg: string, type: 'success' | 'info') => void;
+  onShowToast: (msg: string, type: 'success' | 'warning' | 'info' | 'error') => void;
+  onOpenUpgradeGate: (title: string, desc: string) => void;
 }
 
 export const BudgetView: React.FC<BudgetViewProps> = ({
   trip,
   expenses,
   currentUser,
+  subscription,
   onUpdateTripPlans,
   onShowToast,
+  onOpenUpgradeGate,
 }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [plansState, setPlansState] = useState<Record<ExpenseCategory, string>>(() => {
@@ -58,6 +63,16 @@ export const BudgetView: React.FC<BudgetViewProps> = ({
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
+      {/* PRO FEATURE 4: Smart Budget Alerts Widget */}
+      <BudgetAlertsWidget
+        trip={trip}
+        expenses={expenses}
+        currentUser={currentUser}
+        subscription={subscription}
+        onOpenUpgradeGate={onOpenUpgradeGate}
+        onShowToast={onShowToast}
+      />
+
       {/* Overview Header */}
       <div className="bg-white/5 p-6 rounded-[32px] border border-white/5 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
@@ -81,24 +96,23 @@ export const BudgetView: React.FC<BudgetViewProps> = ({
           ) : (
             <button
               onClick={() => setIsEditing(true)}
-              className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold px-5 py-2.5 rounded-2xl flex items-center space-x-1.5 shadow-xl shadow-blue-600/20 transition-all active:scale-95"
+              className="bg-white/10 hover:bg-white/15 text-white text-xs font-bold px-5 py-2.5 rounded-2xl flex items-center space-x-1.5 border border-white/10 transition"
             >
               <Edit2 className="w-4 h-4" />
-              <span>Ajustar Límites</span>
+              <span>Ajustar Topes</span>
             </button>
           )}
         </div>
       </div>
 
-      {/* Category Grid */}
+      {/* Categories Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {ALL_CATEGORIES.map((cat) => {
+          const details = CATEGORY_DETAILS[cat];
           const spentInCat = categoryBreakdown[cat] || 0;
-          const planItem = (trip.plans || []).find((p) => p.category === cat);
-          const limitAmount = planItem ? planItem.estimatedAmount : Math.round(trip.budget / ALL_CATEGORIES.length);
+          const limitAmount = parseFloat(plansState[cat]) || 0;
           const percent = limitAmount > 0 ? Math.round((spentInCat / limitAmount) * 100) : 0;
           const remaining = limitAmount - spentInCat;
-          const details = CATEGORY_DETAILS[cat];
 
           const isDanger = percent >= 100;
           const isWarning = percent >= 80 && percent < 100;
@@ -106,44 +120,38 @@ export const BudgetView: React.FC<BudgetViewProps> = ({
           return (
             <div
               key={cat}
-              className={`p-6 rounded-[28px] border transition flex flex-col justify-between ${
+              className={`p-6 rounded-[28px] border transition-all flex flex-col justify-between ${
                 isDanger
-                  ? 'border-rose-500/40 bg-rose-950/20 shadow-lg shadow-rose-950/40'
+                  ? 'bg-rose-950/20 border-rose-500/40 shadow-lg shadow-rose-950/50'
                   : isWarning
-                  ? 'border-amber-500/40 bg-amber-950/20'
-                  : 'border-white/5 bg-white/5'
+                  ? 'bg-amber-950/20 border-amber-500/40'
+                  : 'bg-white/5 border-white/5 hover:border-white/10'
               }`}
             >
               <div>
-                {/* Header */}
-                <div className="flex justify-between items-start mb-3">
-                  <div className="flex items-center space-x-2.5">
-                    <div className={`w-8 h-8 rounded-xl flex items-center justify-center border ${details.bg}`}>
-                      <span className={details.color}>●</span>
+                <div className="flex justify-between items-start mb-4">
+                  <div className="flex items-center space-x-3">
+                    <div
+                      className="w-10 h-10 rounded-2xl flex items-center justify-center border"
+                      style={{
+                        backgroundColor: `${details.color}20`,
+                        borderColor: `${details.color}40`,
+                        color: details.color,
+                      }}
+                    >
+                      <Layers className="w-5 h-5" />
                     </div>
                     <div>
-                      <h4 className="text-xs font-bold text-white">{details.label}</h4>
-                      <span className="text-[10px] text-slate-500">
-                        {isDanger ? 'Límite Superado' : isWarning ? 'Cerca del Tope' : 'En Rango Seguro'}
+                      <h4 className="font-bold text-white text-sm">{details.label}</h4>
+                      <span className="text-[10px] text-slate-400">
+                        {percent}% consumido
                       </span>
                     </div>
                   </div>
-
-                  <span
-                    className={`text-xs font-mono font-bold px-2 py-0.5 rounded-full border ${
-                      isDanger
-                        ? 'bg-rose-950 text-rose-300 border-rose-700 animate-pulse'
-                        : isWarning
-                        ? 'bg-amber-950 text-amber-300 border-amber-700'
-                        : 'bg-blue-950/80 text-blue-300 border-blue-800/60'
-                    }`}
-                  >
-                    {percent}%
-                  </span>
                 </div>
 
                 {/* Progress Bar */}
-                <div className="w-full h-2 bg-slate-800/60 rounded-full overflow-hidden mb-4">
+                <div className="w-full h-2.5 bg-slate-800/80 rounded-full overflow-hidden mb-4">
                   <div
                     className={`h-full rounded-full transition-all duration-500 ${
                       isDanger

@@ -148,3 +148,13 @@ GRANT ALL ON TABLE public.subscriptions TO service_role;
 GRANT ALL ON TABLE public.subscription_orders TO service_role;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO service_role;
 
+-- ============================================================================
+-- BLINDAJE EXTRA CONTRA ACCESOS CON CLAVE ANON (DEFENSE IN DEPTH)
+-- ============================================================================
+-- Si un atacante o cliente obtuviera la SUPABASE_ANON_KEY, estas directivas y
+-- el RLS activo impiden totalmente la lectura o modificación directa de cualquier
+-- tabla sensible vía la API REST de PostgREST.
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM anon, authenticated;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM anon, authenticated;
+REVOKE ALL ON ALL ROUTINES IN SCHEMA public FROM anon, authenticated;
+
