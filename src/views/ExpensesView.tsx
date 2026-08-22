@@ -8,7 +8,8 @@ import {
   Filter, 
   ArrowUpDown, 
   Sparkles,
-  Users
+  Users,
+  Download
 } from 'lucide-react';
 import { Expense, Trip, User, ExpenseCategory } from '../types';
 import { ALL_CATEGORIES, CATEGORY_DETAILS } from '../data/currencies';
@@ -22,6 +23,7 @@ interface ExpensesViewProps {
   onEditExpense: (expense: Expense) => void;
   onDeleteExpense: (expenseId: string) => void;
   onTriggerSecret: (msg: string) => void;
+  onOpenExportModal?: () => void;
 }
 
 export const ExpensesView: React.FC<ExpensesViewProps> = ({
@@ -32,11 +34,13 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({
   onEditExpense,
   onDeleteExpense,
   onTriggerSecret,
+  onOpenExportModal,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
   const [selectedPayer, setSelectedPayer] = useState<string>('ALL');
   const [sortBy, setSortBy] = useState<'date-desc' | 'date-asc' | 'amount-desc' | 'amount-asc'>('date-desc');
+  const [expenseToDelete, setExpenseToDelete] = useState<Expense | null>(null);
 
   const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
@@ -93,14 +97,26 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({
               <b className="text-blue-400 font-mono">{formatMoney(totalFilteredHome, currentUser.homeCurrency)}</b>
             </p>
           </div>
-          <button
-            id="add-expense-view-btn"
-            onClick={onOpenAddModal}
-            className="bg-blue-600 hover:bg-blue-500 text-white text-xs sm:text-sm font-bold px-6 py-3 rounded-2xl flex items-center space-x-2 shadow-xl shadow-blue-600/20 transition-all active:scale-95"
-          >
-            <Plus className="w-4 h-4" />
-            <span>+ Registrar Gasto</span>
-          </button>
+          <div className="flex items-center gap-2.5">
+            {onOpenExportModal && (
+              <button
+                onClick={onOpenExportModal}
+                className="bg-slate-900/80 hover:bg-slate-800 text-slate-200 text-xs font-semibold px-4 py-3 rounded-2xl border border-white/10 flex items-center space-x-2 transition shadow-md"
+                title="Exportar informe profesional a PDF, JSON o CSV"
+              >
+                <Download className="w-4 h-4 text-blue-400" />
+                <span>Exportar</span>
+              </button>
+            )}
+            <button
+              id="add-expense-view-btn"
+              onClick={onOpenAddModal}
+              className="bg-blue-600 hover:bg-blue-500 text-white text-xs sm:text-sm font-bold px-6 py-3 rounded-2xl flex items-center space-x-2 shadow-xl shadow-blue-600/20 transition-all active:scale-95"
+            >
+              <Plus className="w-4 h-4" />
+              <span>+ Registrar Gasto</span>
+            </button>
+          </div>
         </div>
 
         {/* Filter Bar */}
@@ -247,11 +263,7 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({
                             <Edit3 className="w-4 h-4" />
                           </button>
                           <button
-                            onClick={() => {
-                              if (confirm(`¿Estás seguro de eliminar el gasto "${exp.title}"?`)) {
-                                onDeleteExpense(exp.id);
-                              }
-                            }}
+                            onClick={() => setExpenseToDelete(exp)}
                             className="p-2 rounded-xl text-slate-400 hover:text-rose-400 hover:bg-white/5 transition"
                             title="Eliminar gasto"
                           >
@@ -267,6 +279,43 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({
           </div>
         )}
       </div>
+
+      {/* Delete Confirmation Modal */}
+      {expenseToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-[#0b101e] border border-white/10 rounded-3xl p-6 max-w-sm w-full shadow-2xl space-y-4">
+            <div className="w-12 h-12 rounded-2xl bg-rose-500/10 text-rose-400 flex items-center justify-center border border-rose-500/20 mx-auto">
+              <Trash2 className="w-6 h-6" />
+            </div>
+            <div className="text-center">
+              <h4 className="text-lg font-bold text-white">¿Eliminar gasto?</h4>
+              <p className="text-xs text-slate-400 mt-1">
+                Se eliminará permanentemente "<span className="text-slate-200 font-semibold">{expenseToDelete.title}</span>" por {formatMoney(expenseToDelete.amount, expenseToDelete.currency)}.
+              </p>
+            </div>
+            <div className="flex gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setExpenseToDelete(null)}
+                className="flex-1 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const id = expenseToDelete.id;
+                  setExpenseToDelete(null);
+                  onDeleteExpense(id);
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition shadow-lg shadow-rose-600/20"
+              >
+                Sí, eliminar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Plane, X, Calendar, DollarSign, Users, Sparkles, ArrowRightLeft, Trash2 } from 'lucide-react';
 import { Trip, CurrencyCode, User } from '../types';
-import { CURRENCIES } from '../data/currencies';
+import { CURRENCIES, CURRENCIES_BY_REGION } from '../data/currencies';
 
 interface TripModalProps {
   trip?: Trip | null;
@@ -173,10 +173,14 @@ export const TripModal: React.FC<TripModalProps> = ({
                 onChange={(e) => handleCurrencyChange(e.target.value as CurrencyCode)}
                 className="w-full bg-slate-900/80 border border-white/10 rounded-2xl p-3 text-white focus:border-blue-500 focus:outline-none"
               >
-                {Object.values(CURRENCIES).map((c) => (
-                  <option key={c.code} value={c.code}>
-                    {c.flag} {c.code} - {c.name} ({c.symbol})
-                  </option>
+                {CURRENCIES_BY_REGION.map((group) => (
+                  <optgroup key={group.region} label={group.region} className="bg-slate-900 text-slate-300 font-semibold">
+                    {group.currencies.map((c) => (
+                      <option key={c.code} value={c.code} className="bg-slate-950 text-white">
+                        {c.flag} {c.code} - {c.name} ({c.symbol})
+                      </option>
+                    ))}
+                  </optgroup>
                 ))}
               </select>
             </div>

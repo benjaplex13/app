@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { CurrencyCode, User } from '../types';
-import { CURRENCIES } from '../data/currencies';
+import { CURRENCIES, CURRENCIES_BY_REGION } from '../data/currencies';
 import { api } from '../utils/api';
 import { RumbioLogo } from '../components/RumbioLogo';
 import { OtpInput } from '../components/OtpInput';
@@ -374,10 +374,14 @@ export const AuthView: React.FC<AuthViewProps> = ({
                 onChange={(e) => setHomeCurrency(e.target.value as CurrencyCode)}
                 className="w-full bg-slate-900 border border-white/10 rounded-2xl py-3 px-4 text-white text-xs focus:border-blue-500 focus:outline-none"
               >
-                {Object.values(CURRENCIES).map((c) => (
-                  <option key={c.code} value={c.code}>
-                    {c.flag} {c.code} - {c.name} ({c.symbol})
-                  </option>
+                {CURRENCIES_BY_REGION.map((group) => (
+                  <optgroup key={group.region} label={group.region} className="bg-slate-900 text-slate-300 font-semibold">
+                    {group.currencies.map((c) => (
+                      <option key={c.code} value={c.code} className="bg-slate-950 text-white">
+                        {c.flag} {c.code} - {c.name} ({c.symbol})
+                      </option>
+                    ))}
+                  </optgroup>
                 ))}
               </select>
             </div>

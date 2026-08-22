@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import { Resend } from 'resend';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { GoogleGenAI } from '@google/genai';
 
 // Types
 export interface UserDoc {
@@ -101,6 +102,11 @@ export interface UserSubscriptionResponse {
     canAutoSettleDebts: boolean;
     canReceiveMonthlyEmailSummary: boolean;
     canSmartBudgetRecommendations: boolean;
+    canScanReceiptsOcr: boolean;
+    canOfflineSync: boolean;
+    canRealTimeFx: boolean;
+    canBudgetAlerts: boolean;
+    canPwaWidget: boolean;
   };
   diagnostics?: {
     flowConfigured: boolean;
@@ -758,6 +764,11 @@ export async function getUserSubscription(userId: string): Promise<UserSubscript
       canAutoSettleDebts: effectivePlan === 'premium',
       canReceiveMonthlyEmailSummary: effectivePlan === 'premium',
       canSmartBudgetRecommendations: effectivePlan === 'premium',
+      canScanReceiptsOcr: effectivePlan !== 'free',
+      canOfflineSync: effectivePlan !== 'free',
+      canRealTimeFx: effectivePlan !== 'free',
+      canBudgetAlerts: effectivePlan !== 'free',
+      canPwaWidget: effectivePlan !== 'free',
     },
     diagnostics: {
       flowConfigured: flowConfig.isConfigured,
@@ -1571,6 +1582,75 @@ app.post('/api/subscriptions/cancel', verifyAuth, async (req: AuthenticatedReque
 });
 
 // ============================================================================
+// TEMPORARY DEMO MODE: Immediate plan activation without Flow.cl checkout dependency
+// FLAG: DEMO_CHECKOUT_AUTO_ACTIVATE (Easily toggle off for live production Flow payments)
+// ============================================================================
+export const DEMO_CHECKOUT_AUTO_ACTIVATE_ENABLED = true;
+
+app.post('/api/subscriptions/demo-activate', verifyAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const { plan = 'pro', billingCycle = 'monthly' } = req.body;
+
+    if (plan !== 'pro' && plan !== 'premium') {
+      return res.status(400).json({ error: 'Plan inválido. Debe ser "pro" o "premium".' });
+    }
+
+    const durationDays = billingCycle === 'annual' ? 365 : 30;
+    const periodEnd = new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000).toISOString();
+    const supabase = getSupabase();
+
+    // Create or update subscription record in database for the authenticated user
+    const { error: subError } = await supabase
+      .from('subscriptions')
+      .upsert(
+        {
+          id: 'sub_' + userId,
+          user_id: userId,
+          plan,
+          billing_cycle: billingCycle,
+          status: 'active',
+          provider: 'demo_checkout',
+          provider_subscription_id: 'DEMO_' + Date.now(),
+          current_period_end: periodEnd,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'user_id' }
+      );
+
+    if (subError) throw new Error(subError.message);
+
+    // Record demo order in subscription_orders
+    const amount = plan === 'pro' ? (billingCycle === 'annual' ? 29990 : 2990) : (billingCycle === 'annual' ? 59990 : 5990);
+    await supabase.from('subscription_orders').insert({
+      id: 'ord_demo_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+      user_id: userId,
+      commerce_order: `DEMO_${plan.toUpperCase()}_${Date.now()}`,
+      plan,
+      billing_cycle: billingCycle,
+      amount,
+      currency: 'CLP',
+      status: 'paid',
+      payment_data: { mode: 'demo_auto_activation', simulatedAt: new Date().toISOString() },
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+
+    const updatedSubscription = await getUserSubscription(userId);
+
+    res.json({
+      success: true,
+      message: `¡Plan ${plan.toUpperCase()} activado en modo demo exitosamente!`,
+      subscription: updatedSubscription,
+      isDemo: true,
+    });
+  } catch (err: any) {
+    console.error('Demo activation error:', err);
+    res.status(500).json({ error: err.message || 'Error al activar plan en modo demo.' });
+  }
+});
+
+// ============================================================================
 // STRICT USER DATA ISOLATION ROUTES (TRIPS & EXPENSES IN SUPABASE)
 // Enforces `WHERE user_id = req.user.id` on every query.
 // ============================================================================
@@ -1907,6 +1987,745 @@ app.delete('/api/expenses/:id', verifyAuth, async (req: AuthenticatedRequest, re
     res.json({ message: 'Gasto eliminado.' });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Error al eliminar gasto.' });
+  }
+});
+
+// ============================================================================
+// 16. AI Chatbot (Pro & Premium Exclusive with Live User Data Context)
+// ============================================================================
+async function handleAiChat(req: AuthenticatedRequest, res: Response) {
+  try {
+    const userId = req.user!.id;
+    const supabase = getSupabase();
+
+    // 1. Verify User Plan (Strict Pro or Premium check)
+    const subscription = await getUserSubscription(userId);
+    if (subscription.plan !== 'pro' && subscription.plan !== 'premium' || subscription.status !== 'active') {
+      return res.status(403).json({
+        error: 'El Asistente Inteligente de IA es una función exclusiva para planes Pro y Premium. Actualiza tu plan para recibir asesoría financiera personalizada y análisis de tus gastos de viaje.',
+        code: 'PRO_PLAN_REQUIRED',
+        requiredPlan: 'pro',
+      });
+    }
+
+    // 2. Validate GEMINI_API_KEY environment variable (strictly no mock responses)
+    const apiKey = process.env.GEMINI_API_KEY?.trim();
+    if (!apiKey) {
+      return res.status(503).json({
+        error: 'La clave de API de Gemini (GEMINI_API_KEY) no está configurada en las variables de entorno del servidor. Por favor, configúrala en el panel de Secrets de AI Studio o variables de entorno para activar las respuestas del Asistente IA.',
+        code: 'MISSING_GEMINI_API_KEY',
+        missingApiKey: true,
+      });
+    }
+
+    // 3. Parse input messages & currentTripId
+    const { messages, currentTripId } = req.body;
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return res.status(400).json({ error: 'Debes proporcionar una lista de mensajes válida para la conversación.' });
+    }
+
+    // 4. Fetch User Data (Profile, Trips, Expenses) for real-data context
+    const { data: userRow } = await supabase
+      .from('users')
+      .select('name, email, home_currency')
+      .eq('id', userId)
+      .maybeSingle();
+
+    const homeCurrency = userRow?.home_currency || 'USD';
+    const userName = userRow?.name || req.user!.name || 'Viajero';
+
+    const { data: rawTrips } = await supabase
+      .from('trips')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false });
+
+    const trips = (rawTrips || []).map(mapTripFromDb);
+
+    const { data: rawExpenses } = await supabase
+      .from('expenses')
+      .select('*')
+      .eq('user_id', userId)
+      .order('date', { ascending: false });
+
+    const expenses = (rawExpenses || []).map(mapExpenseFromDb);
+
+    // 5. Structure live financial context
+    const tripsContext = trips.map(t => {
+      const tripExpenses = expenses.filter(e => e.tripId === t.id);
+      
+      const totalSpentHomeCurrency = tripExpenses.reduce((sum, e) => {
+        if (e.currency === homeCurrency) return sum + e.amount;
+        if (e.currency === t.currency && t.exchangeRate > 0) return sum + (e.amount * t.exchangeRate);
+        return sum + e.amount;
+      }, 0);
+
+      const categoryBreakdown: Record<string, { count: number; totalHomeCurrency: number }> = {};
+      for (const exp of tripExpenses) {
+        const cat = exp.category || 'Otros';
+        if (!categoryBreakdown[cat]) {
+          categoryBreakdown[cat] = { count: 0, totalHomeCurrency: 0 };
+        }
+        categoryBreakdown[cat].count += 1;
+        const amt = exp.currency === homeCurrency ? exp.amount : (t.exchangeRate > 0 ? exp.amount * t.exchangeRate : exp.amount);
+        categoryBreakdown[cat].totalHomeCurrency += amt;
+      }
+
+      // Compute split debts between members for this trip
+      const memberSpending: Record<string, number> = {};
+      const memberShare: Record<string, number> = {};
+      t.members.forEach(m => {
+        memberSpending[m] = 0;
+        memberShare[m] = 0;
+      });
+
+      tripExpenses.forEach(exp => {
+        const payer = exp.paidBy || 'Yo';
+        const amt = exp.currency === homeCurrency ? exp.amount : (t.exchangeRate > 0 ? exp.amount * t.exchangeRate : exp.amount);
+        memberSpending[payer] = (memberSpending[payer] || 0) + amt;
+
+        const splitWith = exp.splitBetween && exp.splitBetween.length > 0 ? exp.splitBetween : t.members;
+        const perPerson = amt / splitWith.length;
+        splitWith.forEach(m => {
+          memberShare[m] = (memberShare[m] || 0) + perPerson;
+        });
+      });
+
+      const memberBalances: Record<string, { paid: number; shouldPay: number; netBalance: number }> = {};
+      t.members.forEach(m => {
+        const paid = memberSpending[m] || 0;
+        const shouldPay = memberShare[m] || 0;
+        memberBalances[m] = {
+          paid: Math.round(paid * 100) / 100,
+          shouldPay: Math.round(shouldPay * 100) / 100,
+          netBalance: Math.round((paid - shouldPay) * 100) / 100,
+        };
+      });
+
+      return {
+        tripId: t.id,
+        isCurrentFocusedTrip: t.id === currentTripId,
+        name: t.name,
+        destination: t.destination,
+        dates: `${t.startDate} hasta ${t.endDate}`,
+        tripCurrency: t.currency,
+        homeCurrency,
+        exchangeRate: `1 ${t.currency} = ${t.exchangeRate} ${homeCurrency}`,
+        budgetInHomeCurrency: t.budget,
+        totalSpentInHomeCurrency: Math.round(totalSpentHomeCurrency * 100) / 100,
+        remainingBudgetInHomeCurrency: Math.round((t.budget - totalSpentHomeCurrency) * 100) / 100,
+        budgetUsagePercent: t.budget > 0 ? Math.round((totalSpentHomeCurrency / t.budget) * 100) : 0,
+        totalExpensesLogged: tripExpenses.length,
+        members: t.members,
+        categoryBreakdown,
+        memberBalances,
+        checklistItemsCount: t.checklist?.length || 0,
+        pendingChecklist: t.checklist?.filter(c => !c.isCompleted).map(c => c.title) || [],
+        recentExpenses: tripExpenses.slice(0, 30).map(e => ({
+          title: e.title,
+          amount: e.amount,
+          currency: e.currency,
+          category: e.category,
+          date: e.date,
+          paidBy: e.paidBy,
+          splitBetween: e.splitBetween,
+          notes: e.notes || undefined,
+        })),
+      };
+    });
+
+    const systemInstruction = `Eres "Rumbio AI", el copiloto y asesor financiero de viajes de Rumbio.
+Interactúas con ${userName} (${userRow?.email || req.user!.email}), usuario con membresía ${subscription.plan.toUpperCase()}.
+Moneda base del usuario: ${homeCurrency}.
+Fecha actual: ${new Date().toISOString().split('T')[0]}.
+Total de viajes en cuenta: ${trips.length}.
+${currentTripId ? `Viaje actualmente seleccionado por el usuario en la interfaz: ID ${currentTripId}.` : ''}
+
+=== DATOS FINANCIEROS REALES DEL USUARIO (BASE DE DATOS EN VIVO) ===
+${JSON.stringify({
+  homeCurrency,
+  tripsSummary: tripsContext,
+}, null, 2)}
+==================================================================
+
+DIRECTIVAS Y REGLAS FUNDAMENTALES:
+1. PRECISIÓN FINANCIERA: Responde basándote estrictamente en los datos reales suministrados arriba. Si el usuario pregunta cuánto ha gastado, su presupuesto restante, categorías con mayor consumo o balances entre personas (quién debe a quién), cita las cifras exactas y la moneda correspondiente (${homeCurrency} o la moneda local del viaje).
+2. CONSEJOS Y RECOMENDACIONES: Ofrece recomendaciones de finanzas de viaje prácticas, inteligentes y breves (por ejemplo: alertas si se acerca al 80% o 100% de su presupuesto, sugerencias para optimizar transporte/comida, cómo saldar deudas grupales equitativamente, o consejos para pagar en moneda local evitando comisiones ocultas).
+3. SI NO HAY VIAJES O GASTOS: Si el usuario aún no tiene datos registrados, dile amablemente que sus registros están vacíos y dale 2-3 sugerencias de cómo configurar su primer viaje y presupuesto en Rumbio.
+4. ESTILO Y FORMATO: Responde en español con un tono profesional, amigable y fintech. Utiliza Markdown claro (viñetas, negritas, subtítulos sencillos). Sé conciso y directo, evitando párrafos excesivamente largos a menos que el usuario solicite un reporte exhaustivo.`;
+
+    // 6. Format conversation history for @google/genai
+    const contents = messages.map((m: { role: string; content: string }) => ({
+      role: m.role === 'assistant' || m.role === 'model' ? 'model' : 'user',
+      parts: [{ text: m.content }],
+    }));
+
+    // 7. Call Gemini API via @google/genai SDK
+    const ai = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    });
+
+    const geminiResponse = await ai.models.generateContent({
+      model: 'gemini-3.7-flash',
+      contents,
+      config: {
+        systemInstruction,
+        temperature: 0.7,
+      },
+    });
+
+    const replyText = geminiResponse.text || 'No se pudo generar una respuesta en este momento.';
+    res.json({ reply: replyText });
+  } catch (err: any) {
+    console.error('Error in AI Chatbot API:', err);
+    res.status(500).json({ error: err.message || 'Error al comunicarse con el Asistente de IA.' });
+  }
+}
+
+app.post('/api/ai/chat', verifyAuth, handleAiChat);
+app.post('/api/chat', verifyAuth, handleAiChat);
+
+// Executive AI Summary for PDF Export
+app.post('/api/ai/trip-summary', verifyAuth, async (req: any, res: any) => {
+  try {
+    const userId = req.user.id;
+    const { tripId, tripData, expensesData } = req.body;
+
+    let trip = tripData;
+    let expenses = expensesData || [];
+
+    if (!trip && tripId) {
+      try {
+        const supabase = getSupabase();
+        const { data: dbTrip } = await supabase.from('trips').select('*').eq('id', tripId).eq('user_id', userId).single();
+        trip = dbTrip ? {
+          id: dbTrip.id,
+          name: dbTrip.name,
+          destination: dbTrip.destination,
+          startDate: dbTrip.start_date,
+          endDate: dbTrip.end_date,
+          budget: Number(dbTrip.budget),
+          currency: dbTrip.currency,
+          exchangeRate: Number(dbTrip.exchange_rate || 1),
+          members: dbTrip.members || [],
+        } : null;
+
+        const { data: dbExpenses } = await supabase.from('expenses').select('*').eq('trip_id', tripId).eq('user_id', userId);
+        if (dbExpenses) {
+          expenses = dbExpenses.map((e: any) => ({
+            id: e.id,
+            title: e.title || e.description,
+            amount: Number(e.amount),
+            currency: e.currency,
+            category: e.category,
+            date: e.date,
+            paidBy: e.paid_by,
+          }));
+        }
+      } catch (dbErr) {
+        console.warn('Could not fetch trip from DB in trip-summary, using payload:', dbErr);
+      }
+    }
+
+    if (!trip) {
+      return res.status(400).json({ error: 'No se encontró el viaje especificado.' });
+    }
+
+    const totalSpentInTripCurr = expenses.reduce((acc: number, e: any) => {
+      const rate = e.currency === trip.currency ? 1 : (e.currency === 'USD' ? (1 / (trip.exchangeRateToHome || 1)) : 1);
+      return acc + (e.amount * rate);
+    }, 0);
+
+    const categoryBreakdown: Record<string, number> = {};
+    expenses.forEach((e: any) => {
+      categoryBreakdown[e.category] = (categoryBreakdown[e.category] || 0) + e.amount;
+    });
+
+    let topCategory = 'Varios';
+    let topCategoryAmount = 0;
+    Object.entries(categoryBreakdown).forEach(([cat, amt]) => {
+      if (amt > topCategoryAmount) {
+        topCategoryAmount = amt;
+        topCategory = cat;
+      }
+    });
+
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      // Fallback algorithmic executive summary if API key is not configured
+      const budgetPct = trip.budget > 0 ? Math.round((totalSpentInTripCurr / trip.budget) * 100) : 0;
+      const fallbackSummary = `Durante tu viaje a ${trip.destination || trip.name}, registraste un gasto acumulado de ${trip.currency} ${Math.round(totalSpentInTripCurr).toLocaleString()} (${budgetPct}% de tu presupuesto inicial de ${trip.currency} ${Math.round(trip.budget).toLocaleString()}). Tu categoría principal de desembolso fue ${topCategory} con ${trip.currency} ${Math.round(topCategoryAmount).toLocaleString()} (${expenses.length > 0 ? Math.round((topCategoryAmount / totalSpentInTripCurr) * 100) : 0}% del total).`;
+      return res.json({ summary: fallbackSummary, source: 'algorithmic-fallback' });
+    }
+
+    const ai = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    });
+
+    const prompt = `Actúa como el analista financiero de Rumbio Travel. Genera un RESUMEN EJECUTIVO FINANCIERO breve, profesional y contundente (máximo 2-3 oraciones) para el encabezado de un reporte formal en PDF.
+Datos del viaje:
+- Destino/Nombre: ${trip.destination || trip.name}
+- Fechas: ${trip.startDate} a ${trip.endDate}
+- Presupuesto Inicial: ${trip.currency} ${trip.budget}
+- Gasto Total Registrado: ${trip.currency} ${totalSpentInTripCurr.toFixed(2)} (${trip.budget > 0 ? ((totalSpentInTripCurr / trip.budget) * 100).toFixed(1) : 'N/A'}% del presupuesto)
+- Total de transacciones: ${expenses.length}
+- Categoría con mayor gasto: ${topCategory} (${trip.currency} ${topCategoryAmount.toFixed(2)})
+- Viajeros: ${trip.travelers?.join(', ') || 'Viajero individual'}
+
+Instrucciones:
+- Responde estrictamente con el texto del resumen en español sin títulos, sin viñetas, sin markdown excesivo.
+- Cita cifras clave exactas (gasto total, porcentaje del presupuesto, categoría dominante).
+- Mantén un tono elegante, analítico y positivo de fintech de viajes.`;
+
+    const geminiResponse = await ai.models.generateContent({
+      model: 'gemini-3.7-flash',
+      contents: prompt,
+      config: {
+        temperature: 0.5,
+      },
+    });
+
+    const summaryText = geminiResponse.text?.trim() || `Durante tu viaje a ${trip.destination || trip.name}, registraste un total de ${trip.currency} ${totalSpentInTripCurr.toFixed(2)}, teniendo como principal categoría de gasto ${topCategory}.`;
+    res.json({ summary: summaryText, source: 'gemini-3.7-flash' });
+  } catch (err: any) {
+    console.error('Error generating AI Trip Summary:', err);
+    res.status(500).json({ error: err.message || 'Error al generar el resumen de IA.' });
+  }
+});
+
+// ============================================================================
+// PRO FEATURE 1: OCR RECEIPT SCANNING (IA Multimodal Vision with Gemini)
+// ============================================================================
+app.post('/api/ai/scan-receipt', verifyAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const userSub = await getUserSubscription(userId);
+
+    // 1. Verify Plan Permissions (Pro or Premium required)
+    if (userSub.plan === 'free') {
+      return res.status(403).json({
+        error: 'El escaneo inteligente de recibos con OCR es una función exclusiva de los planes Pro y Premium.',
+        code: 'PLAN_LIMIT_EXCEEDED',
+        feature: 'ocr_receipt_scan',
+        requiredPlan: 'pro',
+      });
+    }
+
+    // 2. Validate GEMINI_API_KEY explicitly without simulated placeholders
+    const apiKey = process.env.GEMINI_API_KEY?.trim();
+    if (!apiKey) {
+      return res.status(503).json({
+        error: 'La clave de API de Gemini (GEMINI_API_KEY) no está configurada en las variables de entorno del servidor. Por favor, configúrala en el panel de Secrets de AI Studio para activar el escaneo inteligente de recibos con OCR.',
+        code: 'MISSING_GEMINI_API_KEY',
+        missingApiKey: true,
+      });
+    }
+
+    const { imageBase64, mimeType = 'image/jpeg', defaultCurrency = 'USD' } = req.body;
+    if (!imageBase64 || typeof imageBase64 !== 'string') {
+      return res.status(400).json({ error: 'Debes proporcionar una imagen válida del recibo en formato base64.' });
+    }
+
+    // Remove data URL prefix if present (e.g. data:image/png;base64,...)
+    const cleanBase64 = imageBase64.replace(/^data:[a-zA-Z0-9/+-]+;base64,/, '');
+
+    const ai = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    });
+
+    const imagePart = {
+      inlineData: {
+        mimeType: mimeType || 'image/jpeg',
+        data: cleanBase64,
+      },
+    };
+
+    const promptText = `Eres el motor experto de OCR y análisis de recibos de compras de viaje de Rumbio.
+Analiza la foto del recibo o factura adjunta y extrae la información estructurada con máxima exactitud.
+
+CATEGORÍAS PERMITIDAS EXACTAS (elige una):
+- 'Alojamiento' (Hoteles, Airbnb, hostales)
+- 'Comida' (Restaurantes, cafeterías, supermercados, bares, delivery)
+- 'Transporte' (Taxis, Uber, metro, gasolina, trenes, peajes)
+- 'Actividades' (Tours, museos, entradas, excursiones)
+- 'Compras' (Souvenirs, ropa, electrónica, tiendas de regalos)
+- 'Vuelos' (Boletos de avión, tasas aeroportuarias)
+- 'Seguro' (Asistencia en viaje, seguros médicos)
+- 'Imprevistos' (Farmacias, multas, emergencias, varios)
+
+REGLAS DE EXTRACCIÓN:
+1. "amount": El monto total final pagado por el cliente (número positivo, con decimales si aplica).
+2. "currency": El código ISO de 3 letras de la moneda (USD, EUR, CLP, MXN, ARS, COP, PEN, BRL, GBP, JPY, etc.). Si no está explícita, deduce por el país/formato o usa "${defaultCurrency}".
+3. "category": Una de las 8 categorías permitidas.
+4. "title": Nombre comercial claro del establecimiento o resumen del gasto (ej: "Starbucks Coffee", "Supermercado Carrefour", "Uber San Telmo").
+5. "date": Fecha en formato YYYY-MM-DD. Si solo aparece día y mes, usa el año actual (${new Date().getFullYear()}). Si no aparece fecha legible, usa "${new Date().toISOString().split('T')[0]}".
+6. "detectedItems": Lista breve de ítems o productos comprados (máx 6 ítems).
+7. "rawText": Breve transcripción textual clave de las líneas principales del recibo.
+8. "confidence": Número entre 0.1 y 1.0 que indica la legibilidad del ticket.
+
+Responde estrictamente en formato JSON válido sin markdown adicional.`;
+
+    const geminiResponse = await ai.models.generateContent({
+      model: 'gemini-3.7-flash',
+      contents: {
+        parts: [imagePart, { text: promptText }],
+      },
+      config: {
+        responseMimeType: 'application/json',
+        temperature: 0.2,
+      },
+    });
+
+    const responseText = geminiResponse.text?.trim() || '{}';
+    let parsedResult: any = {};
+    try {
+      parsedResult = JSON.parse(responseText);
+    } catch {
+      // Fallback regex extraction if raw json formatting had quirks
+      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        parsedResult = JSON.parse(jsonMatch[0]);
+      }
+    }
+
+    res.json({
+      success: true,
+      result: {
+        amount: Number(parsedResult.amount) || 0,
+        currency: parsedResult.currency || defaultCurrency,
+        category: parsedResult.category || 'Comida',
+        title: parsedResult.title || 'Gasto Recibo',
+        date: parsedResult.date || new Date().toISOString().split('T')[0],
+        detectedItems: Array.isArray(parsedResult.detectedItems) ? parsedResult.detectedItems : [],
+        rawText: parsedResult.rawText || '',
+        confidence: Number(parsedResult.confidence) || 0.9,
+      },
+    });
+  } catch (err: any) {
+    console.error('Error in OCR receipt scan:', err);
+    res.status(500).json({ error: err.message || 'Error al procesar la imagen del recibo con OCR.' });
+  }
+});
+
+// ============================================================================
+// PRO FEATURE 2 & 3: REAL-TIME FX RATES WITH HISTORICAL AUDIT & IN-MEMORY CACHE
+// ============================================================================
+const fxRatesCache: Record<string, { timestamp: number; rates: Record<string, number> }> = {};
+
+app.get('/api/fx/rates', verifyAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const userSub = await getUserSubscription(userId);
+
+    // Verify Plan Permissions
+    if (userSub.plan === 'free') {
+      return res.status(403).json({
+        error: 'Las tasas de cambio en tiempo real son exclusivas de los planes Pro y Premium.',
+        code: 'PLAN_LIMIT_EXCEEDED',
+        feature: 'real_time_fx',
+        requiredPlan: 'pro',
+      });
+    }
+
+    const base = ((req.query.base as string) || 'USD').toUpperCase();
+    const cacheKey = `latest_${base}`;
+    const now = Date.now();
+
+    // 1-hour cache TTL
+    if (fxRatesCache[cacheKey] && now - fxRatesCache[cacheKey].timestamp < 3600 * 1000) {
+      return res.json({
+        base,
+        rates: fxRatesCache[cacheKey].rates,
+        cached: true,
+        updatedAt: new Date(fxRatesCache[cacheKey].timestamp).toISOString(),
+        provider: 'open.er-api.com',
+      });
+    }
+
+    // Query live Open Exchange Rates API (free, reliable, no API key required)
+    try {
+      const response = await fetch(`https://open.er-api.com/v6/latest/${base}`);
+      if (response.ok) {
+        const data: any = await response.json();
+        if (data && data.rates) {
+          fxRatesCache[cacheKey] = {
+            timestamp: now,
+            rates: data.rates,
+          };
+
+          return res.json({
+            base,
+            rates: data.rates,
+            cached: false,
+            updatedAt: new Date().toISOString(),
+            provider: 'open.er-api.com',
+          });
+        }
+      }
+    } catch (fetchErr) {
+      console.warn('Live FX fetch failed, attempting backup:', fetchErr);
+    }
+
+    // Fallback baseline conversion factors if external network is momentarily unavailable
+    const fallbackRates: Record<string, number> = {
+      USD: 1,
+      EUR: 0.92,
+      CLP: 945.5,
+      MXN: 18.2,
+      COP: 3950,
+      ARS: 1180,
+      PEN: 3.75,
+      BRL: 5.45,
+      GBP: 0.79,
+      CAD: 1.36,
+      JPY: 155.2,
+      AUD: 1.52,
+    };
+
+    res.json({
+      base,
+      rates: fallbackRates,
+      cached: false,
+      isFallback: true,
+      updatedAt: new Date().toISOString(),
+      provider: 'rumbio_internal_fallback',
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Error al obtener tasas de cambio en vivo.' });
+  }
+});
+
+app.get('/api/fx/historical', verifyAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const userSub = await getUserSubscription(userId);
+
+    if (userSub.plan === 'free') {
+      return res.status(403).json({
+        error: 'El historial de tasas de cambio es exclusivo de los planes Pro y Premium.',
+        code: 'PLAN_LIMIT_EXCEEDED',
+        feature: 'real_time_fx',
+        requiredPlan: 'pro',
+      });
+    }
+
+    const base = ((req.query.base as string) || 'USD').toUpperCase();
+    const target = ((req.query.target as string) || 'CLP').toUpperCase();
+    const date = (req.query.date as string) || new Date().toISOString().split('T')[0];
+
+    // Attempt querying Frankfurter historical FX API (European Central Bank data)
+    let rate = 1;
+    let provider = 'frankfurter';
+
+    try {
+      const response = await fetch(`https://api.frankfurter.app/${date}?from=${base}&to=${target}`);
+      if (response.ok) {
+        const data: any = await response.json();
+        if (data && data.rates && data.rates[target]) {
+          rate = Number(data.rates[target]);
+        }
+      } else {
+        // Fallback to latest open.er-api
+        const fallbackRes = await fetch(`https://open.er-api.com/v6/latest/${base}`);
+        if (fallbackRes.ok) {
+          const fbData: any = await fallbackRes.json();
+          if (fbData.rates && fbData.rates[target]) {
+            rate = Number(fbData.rates[target]);
+            provider = 'open.er-api';
+          }
+        }
+      }
+    } catch {
+      provider = 'fallback';
+    }
+
+    res.json({
+      base,
+      target,
+      date,
+      rate,
+      provider,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Error al consultar tasa de cambio histórica.' });
+  }
+});
+
+// ============================================================================
+// PRO FEATURE 4: SMART BUDGET ALERTS (In-App & Email via Resend)
+// ============================================================================
+app.post('/api/budget/alert-notification', verifyAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const userEmail = req.user!.email;
+    const userName = req.user!.name || 'Viajero';
+    const userSub = await getUserSubscription(userId);
+
+    if (userSub.plan === 'free') {
+      return res.status(403).json({
+        error: 'Las alertas inteligentes de presupuesto son exclusivas de los planes Pro y Premium.',
+        code: 'PLAN_LIMIT_EXCEEDED',
+        feature: 'budget_alerts',
+        requiredPlan: 'pro',
+      });
+    }
+
+    const { tripName, category = 'Total', threshold = 80, spent, budget, currency = 'USD', sendEmail = false } = req.body;
+
+    let emailSent = false;
+    let emailError: string | null = null;
+
+    if (sendEmail && process.env.RESEND_API_KEY) {
+      const subject = threshold >= 100 
+        ? `⚠️ Alerta de Sobregiro Rumbio: Has alcanzado el 100% en ${tripName}`
+        : `⚡ Alerta de Presupuesto Rumbio: Has consumido el 80% en ${tripName}`;
+
+      const resendResult = await sendEmailNotification(
+        userEmail,
+        userName,
+        threshold >= 100 ? '100% Presupuesto Excedido' : '80% Presupuesto Consumido',
+        subject,
+        'alert',
+        userId
+      );
+
+      emailSent = resendResult.success;
+      if (!resendResult.success) {
+        emailError = resendResult.error || 'No se pudo enviar el correo de alerta.';
+      }
+    }
+
+    res.json({
+      success: true,
+      alert: {
+        tripName,
+        category,
+        threshold,
+        spent,
+        budget,
+        currency,
+        emailSent,
+        emailError,
+        timestamp: new Date().toISOString(),
+      },
+    });
+  } catch (err: any) {
+    console.error('Error sending budget alert:', err);
+    res.status(500).json({ error: err.message || 'Error al procesar alerta de presupuesto.' });
+  }
+});
+
+// ============================================================================
+// PRO FEATURE 5: OFFLINE SYNC BATCH ENDPOINT (Conflict-safe reconciliation)
+// ============================================================================
+app.post('/api/sync/batch', verifyAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const userSub = await getUserSubscription(userId);
+
+    if (userSub.plan === 'free') {
+      return res.status(403).json({
+        error: 'La sincronización automática sin conexión es exclusiva de los planes Pro y Premium.',
+        code: 'PLAN_LIMIT_EXCEEDED',
+        feature: 'offline_sync',
+        requiredPlan: 'pro',
+      });
+    }
+
+    const { expenses = [], trips = [] } = req.body;
+    const supabase = getSupabase();
+    const syncedExpenses: any[] = [];
+    const syncedTrips: any[] = [];
+
+    // 1. Sync Trips first
+    for (const t of trips) {
+      if (!t.name) continue;
+      const tripId = t.id || 'trip_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+      const tripPayload = {
+        id: tripId,
+        user_id: userId,
+        name: t.name,
+        destination: t.destination || 'Destino',
+        start_date: t.startDate || new Date().toISOString().split('T')[0],
+        end_date: t.endDate || new Date().toISOString().split('T')[0],
+        budget: Number(t.budget) || 0,
+        currency: t.currency || 'USD',
+        exchange_rate: Number(t.exchangeRate) || 1.0,
+        members: Array.isArray(t.members) && t.members.length > 0 ? t.members : ['Yo'],
+        plans: Array.isArray(t.plans) ? t.plans : [],
+        checklist: Array.isArray(t.checklist) ? t.checklist : [],
+        created_at: t.createdAt || new Date().toISOString(),
+      };
+
+      const { data: upsertedTrip, error: tripErr } = await supabase
+        .from('trips')
+        .upsert(tripPayload, { onConflict: 'id' })
+        .select()
+        .maybeSingle();
+
+      if (!tripErr && upsertedTrip) {
+        syncedTrips.push(mapTripFromDb(upsertedTrip));
+      }
+    }
+
+    // 2. Sync Expenses
+    for (const e of expenses) {
+      if (!e.tripId || !e.title) continue;
+      const expId = e.id || 'exp_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+      const splitList = Array.isArray(e.splitBetween) && e.splitBetween.length > 0 ? e.splitBetween : ['Yo'];
+
+      const expensePayload = {
+        id: expId,
+        trip_id: e.tripId,
+        user_id: userId,
+        title: e.title,
+        amount: Number(e.amount) || 0,
+        currency: e.currency || 'USD',
+        category: e.category || 'Comida',
+        date: e.date || new Date().toISOString().split('T')[0],
+        paid_by: e.paidBy || 'Yo',
+        split_between: splitList,
+        notes: e.notes || '',
+        created_at: e.createdAt || new Date().toISOString(),
+      };
+
+      const { data: upsertedExp, error: expErr } = await supabase
+        .from('expenses')
+        .upsert(expensePayload, { onConflict: 'id' })
+        .select()
+        .maybeSingle();
+
+      if (!expErr && upsertedExp) {
+        syncedExpenses.push(mapExpenseFromDb(upsertedExp));
+      }
+    }
+
+    res.json({
+      success: true,
+      syncedTripsCount: syncedTrips.length,
+      syncedExpensesCount: syncedExpenses.length,
+      syncedTrips,
+      syncedExpenses,
+      syncedAt: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    console.error('Error in batch sync:', err);
+    res.status(500).json({ error: err.message || 'Error durante la sincronización por lote.' });
   }
 });
 

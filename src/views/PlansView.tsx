@@ -18,12 +18,13 @@ import confetti from 'canvas-confetti';
 import { UserSubscription, PlanTier, BillingCycle, User } from '../types';
 import { PLANS, PLAN_LIMITS } from '../data/plans';
 import { api } from '../utils/api';
+import { CheckoutModal, DEMO_AUTO_ACTIVATE_MODE } from '../components/CheckoutModal';
 
 interface PlansViewProps {
   currentUser: User;
   subscription: UserSubscription | null;
-  onRefreshSubscription: () => Promise<void>;
-  onTriggerToast: (type: 'success' | 'error' | 'info', message: string) => void;
+  onRefreshSubscription: () => Promise<any>;
+  onTriggerToast: (message: string, type?: 'success' | 'error' | 'warning' | 'info') => void;
 }
 
 export const PlansView: React.FC<PlansViewProps> = ({
@@ -37,6 +38,7 @@ export const PlansView: React.FC<PlansViewProps> = ({
   const [canceling, setCanceling] = useState(false);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [configError, setConfigError] = useState<string | null>(null);
+  const [checkoutPlan, setCheckoutPlan] = useState<PlanTier | null>(null);
 
   const currentPlan = subscription?.plan || 'free';
   const isPaidActive = currentPlan !== 'free' && subscription?.status === 'active';
@@ -51,7 +53,15 @@ export const PlansView: React.FC<PlansViewProps> = ({
     }
 
     if (currentPlan === planTier && subscription?.status === 'active') {
-      onTriggerToast('info', `Ya tienes el plan ${planTier.toUpperCase()} activo.`);
+      onTriggerToast(`Ya tienes el plan ${planTier.toUpperCase()} activo.`, 'info');
+      return;
+    }
+
+    // ============================================================================
+    // TEMPORARY DEMO MODE: Open Checkout Modal with instant auto-activation
+    // ============================================================================
+    if (DEMO_AUTO_ACTIVATE_MODE) {
+      setCheckoutPlan(planTier);
       return;
     }
 
@@ -62,7 +72,7 @@ export const PlansView: React.FC<PlansViewProps> = ({
       const checkout = await api.createSubscriptionCheckout(planTier, billingCycle);
 
       if (checkout.redirectUrl) {
-        onTriggerToast('info', 'Redirigiendo a la pasarela segura de Flow.cl...');
+        onTriggerToast('Redirigiendo a la pasarela segura de Flow.cl...', 'info');
         // Open Flow payment gateway
         window.location.href = checkout.redirectUrl;
       }
@@ -73,7 +83,7 @@ export const PlansView: React.FC<PlansViewProps> = ({
           'La pasarela de pago Flow.cl aún no está configurada con llaves de API en las variables de entorno de Vercel (FLOW_API_KEY y FLOW_SECRET_KEY).'
         );
       } else {
-        onTriggerToast('error', err.message || 'Error al conectar con la pasarela de pago.');
+        onTriggerToast(err.message || 'Error al conectar con la pasarela de pago.', 'error');
       }
     } finally {
       setLoadingPlan(null);
@@ -86,9 +96,9 @@ export const PlansView: React.FC<PlansViewProps> = ({
       const res = await api.cancelSubscription();
       await onRefreshSubscription();
       setShowCancelConfirm(false);
-      onTriggerToast('success', res.message || 'Suscripción cancelada.');
+      onTriggerToast(res.message || 'Suscripción cancelada.', 'success');
     } catch (err: any) {
-      onTriggerToast('error', err.message || 'Error al cancelar la suscripción.');
+      onTriggerToast(err.message || 'Error al cancelar la suscripción.', 'error');
     } finally {
       setCanceling(false);
     }
@@ -414,6 +424,21 @@ export const PlansView: React.FC<PlansViewProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Checkout Modal (Demo Mode Auto-Activation) */}
+      {checkoutPlan && (
+        <CheckoutModal
+          isOpen={!!checkoutPlan}
+          onClose={() => setCheckoutPlan(null)}
+          currentUser={currentUser}
+          plan={checkoutPlan}
+          billingCycle={billingCycle}
+          onSuccess={async (newSub) => {
+            await onRefreshSubscription();
+          }}
+          onShowToast={onTriggerToast}
+        />
       )}
     </div>
   );

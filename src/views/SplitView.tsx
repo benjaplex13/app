@@ -13,7 +13,14 @@ import {
   Sparkles,
   Crown,
   Lock,
-  Info
+  Info,
+  HelpCircle,
+  ChevronDown,
+  ChevronUp,
+  Lightbulb,
+  CheckCircle2,
+  ArrowDownRight,
+  ArrowUpRight
 } from 'lucide-react';
 import { Trip, Expense, User, UserSubscription } from '../types';
 import { calculateSplitDebts, formatMoney, convertToHomeCurrency } from '../utils/finance';
@@ -41,6 +48,7 @@ export const SplitView: React.FC<SplitViewProps> = ({
 }) => {
   const [copied, setCopied] = useState(false);
   const [newMemberName, setNewMemberName] = useState('');
+  const [showExplainGuide, setShowExplainGuide] = useState(false);
 
   const canSplit = userSubscription?.limits.canSplitExpenses ?? true;
   const canAutoSettle = userSubscription?.limits.canAutoSettleDebts ?? false;
@@ -80,6 +88,12 @@ export const SplitView: React.FC<SplitViewProps> = ({
     e.preventDefault();
     const cleanName = newMemberName.trim();
     if (!cleanName) return;
+
+    if (cleanName.toLowerCase() === 'yo' || cleanName.toLowerCase() === currentUser.name.toLowerCase()) {
+      onShowToast(`Ya estás registrado en el viaje como usuario principal ("Yo - ${currentUser.name}").`, 'info');
+      setNewMemberName('');
+      return;
+    }
 
     if (trip.members.map(m => m.toLowerCase()).includes(cleanName.toLowerCase())) {
       onShowToast(`"${cleanName}" ya forma parte del grupo.`, 'warning');
@@ -192,6 +206,15 @@ export const SplitView: React.FC<SplitViewProps> = ({
 
         <div className="flex flex-wrap items-center gap-2.5">
           <button
+            onClick={() => setShowExplainGuide(!showExplainGuide)}
+            className="bg-blue-950/60 hover:bg-blue-900/80 text-blue-300 text-xs font-semibold px-4 py-3 rounded-2xl border border-blue-500/30 flex items-center space-x-1.5 transition active:scale-95 shadow-md"
+          >
+            <HelpCircle className="w-4 h-4 text-cyan-400" />
+            <span>{showExplainGuide ? 'Ocultar Guía' : '¿Cómo se calcula? (Ejemplo)'}</span>
+            {showExplainGuide ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+          </button>
+
+          <button
             onClick={onOpenExpenseModal}
             className="bg-slate-900/60 hover:bg-slate-800 text-cyan-300 text-xs font-semibold px-4 py-3 rounded-2xl border border-white/10 flex items-center space-x-1.5 transition active:scale-95"
           >
@@ -208,6 +231,80 @@ export const SplitView: React.FC<SplitViewProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Interactive Explanation Guide (Benjamin vs Ariel Example) */}
+      {showExplainGuide && (
+        <div className="bg-gradient-to-br from-slate-900 via-[#0c1427] to-blue-950 p-6 sm:p-7 rounded-[32px] border border-cyan-500/30 shadow-2xl space-y-5 animate-in fade-in slide-in-from-top-2 duration-200">
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex items-center space-x-3">
+              <div className="w-10 h-10 rounded-2xl bg-cyan-500/20 border border-cyan-500/30 flex items-center justify-center text-cyan-300">
+                <Lightbulb className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white font-display">
+                  ¿Cómo funciona la lógica de compensación en Rumbio?
+                </h3>
+                <p className="text-xs text-slate-300">
+                  Entendiendo quién desembolsó el dinero real y quién le debe transferir a quién.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => setShowExplainGuide(false)}
+              className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-white/5 transition text-xs"
+            >
+              Cerrar
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+            {/* Rule 1 & 2 */}
+            <div className="p-4 rounded-2xl bg-slate-950/60 border border-white/5 space-y-2">
+              <span className="font-bold text-cyan-400 uppercase tracking-wider text-[11px] block">
+                1. Las 2 Reglas de Oro Financieras
+              </span>
+              <ul className="space-y-2 text-slate-300">
+                <li className="flex items-start gap-2">
+                  <span className="text-emerald-400 font-bold">➕</span>
+                  <span><b>¿Quién Pagó?:</b> La persona que sacó el dinero de su bolsillo acumula saldo <b>a favor (+ crédito)</b> por el monto total pagado.</span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="text-rose-400 font-bold">➖</span>
+                  <span><b>¿Entre quiénes se divide?:</b> Cada participante que disfrutó del consumo resta su cuota equivalente <b>(- débito)</b>.</span>
+                </li>
+              </ul>
+            </div>
+
+            {/* Practical Example */}
+            <div className="p-4 rounded-2xl bg-slate-950/60 border border-white/5 space-y-2">
+              <span className="font-bold text-amber-300 uppercase tracking-wider text-[11px] block">
+                2. Ejemplo Práctico: Benjamín y Ariel
+              </span>
+              <p className="text-slate-300 leading-relaxed">
+                Supongamos que <b>Ariel</b> paga <b>$5.000 CLP</b> en un almuerzo y comen <b>Benjamín y Ariel</b>:
+              </p>
+              <div className="p-2.5 rounded-xl bg-blue-950/50 border border-blue-500/20 text-slate-200 text-[11px] space-y-1">
+                <p>• <b>Ariel:</b> Pagó $5.000, su consumo propio fue $2.500 ➔ <b>Saldo a favor: +$2.500</b></p>
+                <p>• <b>Benjamín:</b> Consumió $2.500 y pagó $0 ➔ <b>Saldo deudor: -$2.500</b></p>
+                <p className="text-cyan-300 font-bold pt-1 border-t border-white/10">
+                  👉 Resultado Rumbio: <b>Benjamín le debe transferir $2.500 a Ariel.</b>
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/25 text-xs text-amber-200 space-y-1">
+            <b className="flex items-center gap-1.5 text-amber-300">
+              <Info className="w-4 h-4" /> ¿Por qué a veces salía que Ariel debía pagarle a Benjamín?
+            </b>
+            <p className="text-slate-300 leading-relaxed text-[11px]">
+              Al crear un gasto, el formulario tiene predeterminado el campo <b>"¿Quién Pagó?"</b> como <i>"Yo (Benjamín)"</i>. Si al registrar el gasto de $5.000 no se cambió el pagador a <b>"Ariel"</b>, Rumbio entendió que fue Benjamín quien pagó los $5.000 y que Ariel no pagó nada, por eso le cobraba a Ariel. 
+              <br />
+              <span className="text-cyan-300 font-semibold">Solución rápida:</span> Ve a la pestaña <b>Gastos</b>, edita el gasto, cambia el campo <b>"¿Quién Pagó?"</b> a <b>Ariel</b> y guarda. El balance se corregirá automáticamente.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Member Management Bar */}
       <div className="bg-white/5 p-6 rounded-[32px] border border-white/5">
@@ -373,6 +470,70 @@ export const SplitView: React.FC<SplitViewProps> = ({
             </div>
           </div>
         </div>
+      </div>
+
+      {/* Itemized Shared Expenses Ledger */}
+      <div className="bg-white/5 p-6 sm:p-8 rounded-[32px] border border-white/5 space-y-4">
+        <div className="flex justify-between items-center">
+          <div>
+            <h3 className="text-sm font-bold uppercase tracking-widest text-slate-400 flex items-center gap-2 font-display">
+              <Receipt className="w-4 h-4 text-cyan-400" /> Registro Detallado de Gastos Compartidos ({expenses.length})
+            </h3>
+            <p className="text-xs text-slate-400 mt-0.5">
+              Auditoría de quién pagó cada cuenta y la cuota exacta asignada a cada acompañante.
+            </p>
+          </div>
+        </div>
+
+        {expenses.length === 0 ? (
+          <p className="text-xs text-slate-400 py-6 text-center italic">
+            Aún no hay gastos registrados en este viaje.
+          </p>
+        ) : (
+          <div className="divide-y divide-white/5">
+            {expenses.map((expense) => {
+              const costHome = convertToHomeCurrency(expense.amount, expense.currency, trip, currentUser.homeCurrency);
+              const payerName = expense.paidBy === 'Yo' ? `Yo (${currentUser.name})` : (expense.paidBy || 'Yo');
+              const participants = expense.splitBetween && expense.splitBetween.length > 0 ? expense.splitBetween : ['Yo'];
+              const sharePerPerson = costHome / participants.length;
+
+              return (
+                <div key={expense.id} className="py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                  <div className="space-y-1">
+                    <div className="flex items-center space-x-2">
+                      <span className="font-bold text-white text-sm">{expense.title}</span>
+                      <span className="text-[10px] text-slate-400 bg-white/5 px-2 py-0.5 rounded-full border border-white/5">
+                        {expense.date || 'Sin fecha'}
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-300">
+                      <span className="flex items-center gap-1">
+                        <span className="text-emerald-400 font-bold">💳 Pagó:</span>
+                        <b className="text-white">{payerName}</b>
+                      </span>
+                      <span>•</span>
+                      <span className="flex items-center gap-1">
+                        <span className="text-cyan-400 font-bold">👥 Dividido entre ({participants.length}):</span>
+                        <span>{participants.map(p => p === 'Yo' ? `Yo (${currentUser.name})` : p).join(', ')}</span>
+                      </span>
+                      <span>•</span>
+                      <span>Cuota c/u: <b className="font-mono text-cyan-300">{formatMoney(sharePerPerson, currentUser.homeCurrency)}</b></span>
+                    </div>
+                  </div>
+
+                  <div className="text-left sm:text-right shrink-0">
+                    <span className="text-sm font-mono font-bold text-white block">
+                      {formatMoney(expense.amount, expense.currency)}
+                    </span>
+                    <span className="text-[10px] text-slate-400">
+                      {formatMoney(costHome, currentUser.homeCurrency)}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );

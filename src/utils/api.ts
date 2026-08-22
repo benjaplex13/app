@@ -162,9 +162,124 @@ export const api = {
     });
   },
 
+  // TEMPORARY DEMO MODE: Activates plan instantly for testing without Flow payment dependency
+  async activateDemoSubscription(plan: PlanTier, billingCycle: BillingCycle = 'monthly') {
+    return apiFetch<{ success: boolean; message: string; subscription: UserSubscription; isDemo: boolean }>(
+      '/api/subscriptions/demo-activate',
+      {
+        method: 'POST',
+        body: JSON.stringify({ plan, billingCycle }),
+      }
+    );
+  },
+
   async cancelSubscription() {
     return apiFetch<{ message: string; subscription: UserSubscription }>('/api/subscriptions/cancel', {
       method: 'POST',
+    });
+  },
+
+  // AI Chatbot (Pro & Premium)
+  async sendChatMessage(messages: { role: 'user' | 'assistant'; content: string }[], currentTripId?: string | null) {
+    return apiFetch<{ reply: string }>('/api/ai/chat', {
+      method: 'POST',
+      body: JSON.stringify({ messages, currentTripId }),
+    });
+  },
+
+  // AI Summary for Trip & PDF Report
+  async getTripAiSummary(tripId?: string, tripData?: Trip, expensesData?: Expense[]) {
+    return apiFetch<{ summary: string; source: string }>('/api/ai/trip-summary', {
+      method: 'POST',
+      body: JSON.stringify({ tripId, tripData, expensesData }),
+    });
+  },
+
+  // 1. Pro: Receipt OCR Scanning
+  async scanReceiptOcr(imageBase64: string, mimeType: string = 'image/jpeg', defaultCurrency: CurrencyCode = 'USD') {
+    return apiFetch<{
+      success: boolean;
+      result: {
+        amount: number;
+        currency: CurrencyCode;
+        category: any;
+        title: string;
+        date: string;
+        detectedItems: string[];
+        rawText: string;
+        confidence: number;
+      };
+    }>('/api/ai/scan-receipt', {
+      method: 'POST',
+      body: JSON.stringify({ imageBase64, mimeType, defaultCurrency }),
+    });
+  },
+
+  // 2. Pro: Real-Time & Historical FX Rates
+  async getLiveFxRates(base: string = 'USD') {
+    return apiFetch<{
+      base: string;
+      rates: Record<string, number>;
+      cached: boolean;
+      updatedAt: string;
+      provider: string;
+      isFallback?: boolean;
+    }>(`/api/fx/rates?base=${encodeURIComponent(base)}`);
+  },
+
+  async getHistoricalFxRate(base: string, target: string, date: string) {
+    return apiFetch<{
+      base: string;
+      target: string;
+      date: string;
+      rate: number;
+      provider: string;
+    }>(`/api/fx/historical?base=${encodeURIComponent(base)}&target=${encodeURIComponent(target)}&date=${encodeURIComponent(date)}`);
+  },
+
+  // 3. Pro: Smart Budget Alert Notifications
+  async sendBudgetAlertNotification(payload: {
+    tripName: string;
+    category?: string;
+    threshold: number;
+    spent: number;
+    budget: number;
+    currency: string;
+    sendEmail?: boolean;
+  }) {
+    return apiFetch<{
+      success: boolean;
+      alert: any;
+    }>('/api/budget/alert-notification', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  // 4. Pro: Offline Batch Synchronization
+  async syncBatchOffline(data: { expenses?: Partial<Expense>[]; trips?: Partial<Trip>[] }) {
+    return apiFetch<{
+      success: boolean;
+      syncedTripsCount: number;
+      syncedExpensesCount: number;
+      syncedTrips: Trip[];
+      syncedExpenses: Expense[];
+      syncedAt: string;
+    }>('/api/sync/batch', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
+  // Generic request helpers
+  async get<T>(endpoint: string) {
+    return apiFetch<T>(endpoint, { method: 'GET' });
+  },
+
+  async post<T>(endpoint: string, body?: any) {
+    return apiFetch<T>(endpoint, {
+      method: 'POST',
+      body: body ? JSON.stringify(body) : undefined,
     });
   },
 

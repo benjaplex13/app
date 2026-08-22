@@ -23,6 +23,7 @@ import { PlannerView } from './views/PlannerView';
 import { ChecklistView } from './views/ChecklistView';
 import { ProfileView } from './views/ProfileView';
 import { PlansView } from './views/PlansView';
+import { ChatView } from './views/ChatView';
 import { Navbar } from './components/Navbar';
 import { TabsNav } from './components/TabsNav';
 import { TripModal } from './components/TripModal';
@@ -31,7 +32,11 @@ import { OnboardingModal } from './components/OnboardingModal';
 import { ToastContainer } from './components/ToastContainer';
 import { LogoBrandModal } from './components/LogoBrandModal';
 import { PlanGateModal } from './components/PlanGateModal';
+import { CheckoutModal } from './components/CheckoutModal';
+import { ExportModal } from './components/ExportModal';
+import { AiChatFloatingWidget } from './components/AiChatFloatingWidget';
 import { LogoConcept } from './components/RumbioLogo';
+import { downloadStructuredJSON } from './utils/exportEngine';
 import { Compass, Plus, Loader2 } from 'lucide-react';
 
 export function App() {
@@ -43,13 +48,17 @@ export function App() {
   const [currentTab, setCurrentTab] = useState<TabType>('overview');
   const [subscription, setSubscription] = useState<UserSubscription | null>(null);
 
-  // Plan Gate Modal
+  // Plan Gate Modal & Direct Checkout
   const [isPlanGateOpen, setIsPlanGateOpen] = useState(false);
+  const [checkoutPlanModal, setCheckoutPlanModal] = useState<PlanTier | null>(null);
   const [planGateInfo, setPlanGateInfo] = useState<{
     title?: string;
     description?: string;
     requiredPlan?: PlanTier;
   }>({});
+
+  // Export Modal
+  const [isExportModalOpen, setIsExportModalOpen] = useState(false);
 
   // Brand Concept
   const [logoConcept, setLogoConcept] = useState<LogoConcept>(() => {
@@ -381,22 +390,13 @@ export function App() {
 
   const handleExportAllJSON = () => {
     if (!currentUser) return;
-    const payload = {
-      user: { id: currentUser.id, name: currentUser.name, email: currentUser.email, homeCurrency: currentUser.homeCurrency },
-      exportedAt: new Date().toISOString(),
-      trips,
-      expenses,
-    };
-    const jsonStr = JSON.stringify(payload, null, 2);
-    const blob = new Blob([jsonStr], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', `rumbio_respaldo_${currentUser.name.replace(/\s+/g, '_')}.json`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    showToast('Copia de respaldo JSON descargada con éxito.', 'success');
+    try {
+      downloadStructuredJSON(currentUser, trips, expenses);
+      showToast('Copia de respaldo JSON estructurada (v2.1) descargada con éxito.', 'success');
+    } catch (err) {
+      console.error('Error generating structured JSON:', err);
+      showToast('Error al exportar datos JSON.', 'error');
+    }
   };
 
   // Active Trip object
@@ -473,7 +473,19 @@ export function App() {
                 onOpenPlans={() => setCurrentTab('plans')}
                 onUpdateBaseCurrency={handleUpdateBaseCurrency}
                 onExportAllJSON={handleExportAllJSON}
+                onOpenExportModal={() => setIsExportModalOpen(true)}
                 onShowToast={showToast}
+              />
+            ) : currentTab === 'chat' ? (
+              <ChatView
+                currentUser={currentUser}
+                subscription={subscription}
+                trips={trips}
+                activeTrip={activeTrip}
+                expenses={expenses}
+                onOpenPlans={() => setCurrentTab('plans')}
+                onShowToast={showToast}
+                onOpenUpgradeGate={openUpgradeGate}
               />
             ) : !activeTrip ? (
               /* Empty state if user has no trips */
@@ -518,6 +530,7 @@ export function App() {
                       setIsExpenseModalOpen(true);
                     }}
                     onExportCSV={handleExportCSV}
+                    onOpenExportModal={() => setIsExportModalOpen(true)}
                   />
                 )}
 
@@ -536,6 +549,7 @@ export function App() {
                     }}
                     onDeleteExpense={handleDeleteExpense}
                     onTriggerSecret={(msg) => showToast(msg, 'success')}
+                    onOpenExportModal={() => setIsExportModalOpen(true)}
                   />
                 )}
 
@@ -595,12 +609,27 @@ export function App() {
         onClose={() => setIsPlanGateOpen(false)}
         onSelectPlan={(plan) => {
           setIsPlanGateOpen(false);
-          setCurrentTab('plans');
+          setCheckoutPlanModal(plan);
         }}
         requiredPlan={planGateInfo.requiredPlan || 'pro'}
         featureTitle={planGateInfo.title}
         featureDescription={planGateInfo.description}
       />
+
+      {/* Direct Checkout Modal (Demo Mode Auto-Activation) */}
+      {checkoutPlanModal && currentUser && (
+        <CheckoutModal
+          isOpen={!!checkoutPlanModal}
+          onClose={() => setCheckoutPlanModal(null)}
+          currentUser={currentUser}
+          plan={checkoutPlanModal}
+          billingCycle="monthly"
+          onSuccess={async (newSub) => {
+            await fetchSubscription();
+          }}
+          onShowToast={showToast}
+        />
+      )}
 
       {/* Trip Modal */}
       {isTripModalOpen && currentUser && (
@@ -645,6 +674,33 @@ export function App() {
             localStorage.setItem('rumbio_logo_concept', newConcept);
           }}
           onClose={() => setIsBrandModalOpen(false)}
+          onShowToast={showToast}
+        />
+      )}
+
+      {/* Professional Export Modal (PDF with AI Summary, Structured JSON, CSV) */}
+      {isExportModalOpen && currentUser && (
+        <ExportModal
+          isOpen={isExportModalOpen}
+          onClose={() => setIsExportModalOpen(false)}
+          trips={trips}
+          activeTripId={activeTripId}
+          expenses={expenses}
+          currentUser={currentUser}
+          onShowToast={showToast}
+        />
+      )}
+
+      {/* Floating AI Assistant Copilot Widget */}
+      {currentUser && currentTab !== 'chat' && (
+        <AiChatFloatingWidget
+          currentUser={currentUser}
+          subscription={subscription}
+          trips={trips}
+          activeTrip={activeTrip}
+          expenses={expenses}
+          onOpenFullChat={() => setCurrentTab('chat')}
+          onOpenUpgradeGate={openUpgradeGate}
           onShowToast={showToast}
         />
       )}

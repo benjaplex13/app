@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Receipt, X, Calendar, DollarSign, Tag, Users, FileText, Sparkles, Check } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { Expense, Trip, CurrencyCode, ExpenseCategory, User } from '../types';
-import { ALL_CATEGORIES, CATEGORY_DETAILS, CURRENCIES } from '../data/currencies';
+import { ALL_CATEGORIES, CATEGORY_DETAILS, CURRENCIES, CURRENCIES_BY_REGION } from '../data/currencies';
 import { convertToHomeCurrency, formatMoney } from '../utils/finance';
 
 interface ExpenseModalProps {
@@ -152,19 +152,23 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
                 onChange={(e) => setCurrency(e.target.value as CurrencyCode)}
                 className="w-full bg-slate-900/80 border border-white/10 rounded-2xl p-3 text-white focus:border-blue-500 focus:outline-none"
               >
-                <option value={trip.currency}>
-                  {CURRENCIES[trip.currency]?.flag} {trip.currency} (Moneda Destino)
-                </option>
-                <option value={currentUser.homeCurrency}>
-                  {CURRENCIES[currentUser.homeCurrency]?.flag} {currentUser.homeCurrency} (Tu Moneda Base)
-                </option>
-                {Object.values(CURRENCIES)
-                  .filter(c => c.code !== trip.currency && c.code !== currentUser.homeCurrency)
-                  .map((c) => (
-                    <option key={c.code} value={c.code}>
-                      {c.flag} {c.code} - {c.name}
-                    </option>
-                  ))}
+                <optgroup label="Sugerencias Rápidas" className="bg-slate-900 text-cyan-400 font-bold">
+                  <option value={trip.currency} className="bg-slate-950 text-white">
+                    {CURRENCIES[trip.currency]?.flag} {trip.currency} ({CURRENCIES[trip.currency]?.symbol}) - Moneda Destino
+                  </option>
+                  <option value={currentUser.homeCurrency} className="bg-slate-950 text-white">
+                    {CURRENCIES[currentUser.homeCurrency]?.flag} {currentUser.homeCurrency} ({CURRENCIES[currentUser.homeCurrency]?.symbol}) - Tu Moneda Base
+                  </option>
+                </optgroup>
+                {CURRENCIES_BY_REGION.map((group) => (
+                  <optgroup key={group.region} label={group.region} className="bg-slate-900 text-slate-300 font-semibold">
+                    {group.currencies.map((c) => (
+                      <option key={c.code} value={c.code} className="bg-slate-950 text-white">
+                        {c.flag} {c.code} - {c.name} ({c.symbol})
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
               </select>
             </div>
           </div>
@@ -287,14 +291,35 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
                     <div className={`w-3.5 h-3.5 rounded flex items-center justify-center ${isChecked ? 'bg-blue-500 text-white' : 'border border-slate-700'}`}>
                       {isChecked && <Check className="w-3 h-3 stroke-[3]" />}
                     </div>
-                    <span>{member}</span>
+                    <span>{member === 'Yo' ? `Yo (${currentUser.name})` : member}</span>
                   </button>
                 );
               })}
             </div>
-            <p className="text-[10px] text-slate-400 mt-2.5">
-              Cuota estimada por persona: <b className="text-white">{formatMoney(convertedHome / (splitBetween.length || 1), currentUser.homeCurrency)}</b>
-            </p>
+
+            {numAmount > 0 && (
+              <div className="mt-3 p-3 bg-blue-950/40 border border-blue-500/20 rounded-xl space-y-1">
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="text-slate-400">Cuota por participante:</span>
+                  <b className="text-cyan-300 font-mono text-xs">
+                    {formatMoney(convertedHome / (splitBetween.length || 1), currentUser.homeCurrency)}
+                  </b>
+                </div>
+                <p className="text-[10.5px] text-slate-300 leading-snug pt-1 border-t border-white/5">
+                  {splitBetween.length === 1 && splitBetween[0] === paidBy ? (
+                    <span>• <b>Gasto individual:</b> {paidBy === 'Yo' ? 'Tú pagas y consumes' : `${paidBy} paga y consume`} el 100%. No genera deudas.</span>
+                  ) : splitBetween.includes(paidBy) ? (
+                    <span>
+                      • <b>{paidBy === 'Yo' ? `Tú (Yo - ${currentUser.name})` : paidBy}</b> desembolsa {formatMoney(convertedHome, currentUser.homeCurrency)}. Los demás participantes seleccionados ({splitBetween.filter(m => m !== paidBy).map(m => m === 'Yo' ? `Yo (${currentUser.name})` : m).join(', ')}) le deberán <b>{formatMoney(convertedHome / (splitBetween.length || 1), currentUser.homeCurrency)}</b> cada uno a <b>{paidBy === 'Yo' ? currentUser.name : paidBy}</b>.
+                    </span>
+                  ) : (
+                    <span>
+                      • <b>{paidBy === 'Yo' ? `Tú (Yo - ${currentUser.name})` : paidBy}</b> pagó por el grupo sin participar del consumo. Todos los seleccionados le deben transferir su cuota a {paidBy === 'Yo' ? currentUser.name : paidBy}.
+                    </span>
+                  )}
+                </p>
+              </div>
+            )}
           </div>
 
           {/* Notes */}

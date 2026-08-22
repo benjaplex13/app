@@ -1,17 +1,34 @@
 import { CurrencyCode, Expense, Trip, DebtSettlement, ExpenseCategory } from '../types';
 import { CURRENCIES } from '../data/currencies';
 
+const ZERO_DECIMAL_CURRENCIES: Set<CurrencyCode> = new Set([
+  'CLP',
+  'COP',
+  'PYG',
+  'JPY',
+  'KRW',
+  'HUF',
+  'VND',
+  'IDR',
+  'ISK',
+]);
+
 export function formatMoney(amount: number, currency: CurrencyCode = 'USD'): string {
+  const safeAmount = Number.isFinite(amount) ? amount : 0;
+  const isZeroDecimal = ZERO_DECIMAL_CURRENCIES.has(currency);
   try {
     return new Intl.NumberFormat('es-ES', {
       style: 'currency',
       currency: currency,
-      minimumFractionDigits: currency === 'CLP' || currency === 'JPY' || currency === 'COP' ? 0 : 2,
-      maximumFractionDigits: 2,
-    }).format(amount);
+      minimumFractionDigits: isZeroDecimal ? 0 : 2,
+      maximumFractionDigits: isZeroDecimal ? 0 : 2,
+    }).format(safeAmount);
   } catch {
     const sym = CURRENCIES[currency]?.symbol || '$';
-    return `${sym} ${amount.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    return `${sym} ${safeAmount.toLocaleString('es-ES', { 
+      minimumFractionDigits: isZeroDecimal ? 0 : 2, 
+      maximumFractionDigits: isZeroDecimal ? 0 : 2 
+    })}`;
   }
 }
 
@@ -27,16 +44,23 @@ export function convertToHomeCurrency(
   trip: Trip,
   homeCurrency: CurrencyCode
 ): number {
+  const safeAmount = Number.isFinite(amount) ? amount : 0;
+  if (!safeAmount) return 0;
+  
   if (expenseCurrency === homeCurrency) {
-    return amount;
+    return safeAmount;
   }
-  if (expenseCurrency === trip.currency) {
-    return amount * trip.exchangeRate;
+  
+  const tripRate = trip?.exchangeRate && trip.exchangeRate > 0 ? trip.exchangeRate : 1;
+
+  if (expenseCurrency === trip?.currency) {
+    return safeAmount * tripRate;
   }
   // Cross conversion using approx USD table
   const fromRate = CURRENCIES[expenseCurrency]?.approxRateToUSD || 1;
   const toRate = CURRENCIES[homeCurrency]?.approxRateToUSD || 1;
-  return (amount * fromRate) / toRate;
+  const safeToRate = toRate > 0 ? toRate : 1;
+  return (safeAmount * fromRate) / safeToRate;
 }
 
 /**

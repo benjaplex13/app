@@ -1,4 +1,48 @@
-export type CurrencyCode = 'USD' | 'EUR' | 'CLP' | 'MXN' | 'COP' | 'ARS' | 'PEN' | 'JPY' | 'GBP' | 'BRL' | 'THB' | 'CAD' | 'AUD' | 'CHF';
+export type CurrencyCode =
+  | 'USD'
+  | 'EUR'
+  | 'CLP'
+  | 'MXN'
+  | 'COP'
+  | 'ARS'
+  | 'PEN'
+  | 'BRL'
+  | 'UYU'
+  | 'BOB'
+  | 'PYG'
+  | 'CRC'
+  | 'DOP'
+  | 'GTQ'
+  | 'HNL'
+  | 'NIO'
+  | 'PAB'
+  | 'CAD'
+  | 'GBP'
+  | 'CHF'
+  | 'SEK'
+  | 'NOK'
+  | 'DKK'
+  | 'PLN'
+  | 'CZK'
+  | 'HUF'
+  | 'RON'
+  | 'TRY'
+  | 'ISK'
+  | 'JPY'
+  | 'CNY'
+  | 'KRW'
+  | 'THB'
+  | 'SGD'
+  | 'AUD'
+  | 'NZD'
+  | 'AED'
+  | 'IDR'
+  | 'INR'
+  | 'VND'
+  | 'EGP'
+  | 'ZAR'
+  | 'MAD'
+  | 'ILS';
 
 export interface User {
   id: string;
@@ -34,6 +78,11 @@ export interface Expense {
   splitBetween: string[];
   notes?: string;
   createdAt: string;
+  // Pro enhancements
+  exchangeRateAtDate?: number;
+  exchangeRateDate?: string;
+  receiptImageUrl?: string;
+  isOfflinePending?: boolean;
 }
 
 export interface PlanItem {
@@ -85,7 +134,14 @@ export interface EmailMessage {
   read: boolean;
 }
 
-export type TabType = 'overview' | 'expenses' | 'budget' | 'split' | 'planner' | 'checklist' | 'plans' | 'profile';
+export type TabType = 'overview' | 'expenses' | 'budget' | 'split' | 'planner' | 'checklist' | 'chat' | 'plans' | 'profile';
+
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: string;
+}
 
 export type PlanTier = 'free' | 'pro' | 'premium';
 export type BillingCycle = 'monthly' | 'annual';
@@ -100,6 +156,37 @@ export interface PlanLimits {
   canMonthlyEmailSummary: boolean;
   canAiBudgetRecommendations: boolean;
   hasAdvancedBudgetAlerts: boolean;
+  // 5 New Pro (and higher) exclusive capabilities
+  canScanReceiptsOcr: boolean;
+  canOfflineSync: boolean;
+  canRealTimeFx: boolean;
+  canBudgetAlerts: boolean;
+  canPwaWidget: boolean;
+}
+
+export interface OcrReceiptResult {
+  amount?: number;
+  currency?: CurrencyCode;
+  category?: ExpenseCategory;
+  title?: string;
+  date?: string;
+  detectedItems?: string[];
+  rawText?: string;
+  confidence?: number;
+}
+
+export interface BudgetAlert {
+  id: string;
+  tripId: string;
+  category?: ExpenseCategory | 'Total';
+  threshold: 80 | 100;
+  spent: number;
+  budget: number;
+  currency: CurrencyCode;
+  percentage: number;
+  message: string;
+  advice: string;
+  createdAt: string;
 }
 
 export interface PlanPricing {

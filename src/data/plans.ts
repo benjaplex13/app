@@ -10,6 +10,12 @@ export const PLAN_LIMITS: Record<PlanTier, PlanLimits> = {
     canMonthlyEmailSummary: false,
     canAiBudgetRecommendations: false,
     hasAdvancedBudgetAlerts: false,
+    // 5 New Pro Features
+    canScanReceiptsOcr: false,
+    canOfflineSync: false,
+    canRealTimeFx: false,
+    canBudgetAlerts: false,
+    canPwaWidget: false,
   },
   pro: {
     maxActiveTrips: 9999,
@@ -20,6 +26,12 @@ export const PLAN_LIMITS: Record<PlanTier, PlanLimits> = {
     canMonthlyEmailSummary: false,
     canAiBudgetRecommendations: false,
     hasAdvancedBudgetAlerts: true,
+    // 5 New Pro Features
+    canScanReceiptsOcr: true,
+    canOfflineSync: true,
+    canRealTimeFx: true,
+    canBudgetAlerts: true,
+    canPwaWidget: true,
   },
   premium: {
     maxActiveTrips: 9999,
@@ -30,6 +42,12 @@ export const PLAN_LIMITS: Record<PlanTier, PlanLimits> = {
     canMonthlyEmailSummary: true,
     canAiBudgetRecommendations: true,
     hasAdvancedBudgetAlerts: true,
+    // 5 New Pro Features
+    canScanReceiptsOcr: true,
+    canOfflineSync: true,
+    canRealTimeFx: true,
+    canBudgetAlerts: true,
+    canPwaWidget: true,
   },
 };
 
@@ -47,15 +65,18 @@ export const PLANS_DATA: PlanPricing[] = [
     ctaLabel: 'Plan Actual',
     features: [
       { text: '1 viaje activo a la vez', included: true },
-      { text: 'Hasta 2 divisas por viaje', included: true },
+      { text: 'Hasta 2 divisas por viaje con tasa fija', included: true },
       { text: 'Presupuesto por categoría básico', included: true },
-      { text: 'Checklist de viaje y control offline', included: true },
-      { text: 'División de gastos entre viajeros', included: false },
+      { text: 'Checklist de viaje y notas', included: true },
+      { text: 'Escaneo de recibos con OCR inteligente', included: false },
+      { text: 'Modo sin conexión con sincronización automática', included: false },
+      { text: 'Tasas de cambio en tiempo real con historial', included: false },
+      { text: 'Alertas inteligentes de presupuesto (80% y 100%)', included: false },
+      { text: 'Widget de resumen rápido PWA', included: false },
+      { text: 'División de gastos entre viajeros (Split)', included: false },
       { text: 'Exportar a PDF, Excel y CSV', included: false },
-      { text: 'Alertas avanzadas de sobregasto', included: false },
       { text: 'Liquidación automática de deudas (quién le debe a quién)', included: false, premiumOnly: true },
       { text: 'Resumen mensual automático por correo', included: false, premiumOnly: true },
-      { text: 'Recomendaciones inteligentes de presupuesto', included: false, premiumOnly: true },
     ],
   },
   {
@@ -71,14 +92,17 @@ export const PLANS_DATA: PlanPricing[] = [
     ctaLabel: 'Mejorar a Pro',
     features: [
       { text: 'Viajes activos ilimitados', included: true },
-      { text: 'Divisas ilimitadas por viaje', included: true },
+      { text: 'Escaneo inteligente de recibos con OCR (IA Vision)', included: true },
+      { text: 'Modo sin conexión con sincronización automática', included: true },
+      { text: 'Tasas de cambio en vivo del día con historial', included: true },
+      { text: 'Alertas inteligentes de presupuesto (app y correo)', included: true },
+      { text: 'Widget de resumen de viaje rápido (PWA)', included: true },
       { text: 'División de gastos entre viajeros (Split)', included: true },
       { text: 'Exportar reportes a PDF, Excel y CSV', included: true },
-      { text: 'Presupuesto por categoría avanzado con alertas', included: true },
-      { text: 'Sincronización multi-dispositivo y backups', included: true },
+      { text: 'Divisas ilimitadas por viaje', included: true },
       { text: 'Liquidación automática de deudas (quién le debe a quién)', included: false, premiumOnly: true },
       { text: 'Resumen mensual automático por correo', included: false, premiumOnly: true },
-      { text: 'Recomendaciones inteligentes de presupuesto', included: false, premiumOnly: true },
+      { text: 'Recomendaciones de IA de presupuesto', included: false, premiumOnly: true },
     ],
   },
   {
@@ -94,6 +118,8 @@ export const PLANS_DATA: PlanPricing[] = [
     ctaLabel: 'Mejorar a Premium',
     features: [
       { text: 'Todo lo incluido en el plan Pro', included: true },
+      { text: 'Escaneo de recibos OCR ilimitado', included: true },
+      { text: 'Sincronización multi-dispositivo prioritaria', included: true },
       { text: 'Liquidación automática de gastos divididos (quién le debe a quién, resumen final)', included: true },
       { text: 'Resumen mensual automático detallado por correo electrónico', included: true },
       { text: 'Recomendaciones inteligentes de optimización de presupuesto', included: true },

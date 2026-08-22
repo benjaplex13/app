@@ -7,7 +7,8 @@ import {
   Calculator, 
   CheckSquare, 
   UserCog,
-  Crown
+  Crown,
+  Sparkles
 } from 'lucide-react';
 import { TabType, PlanTier } from '../types';
 
@@ -33,6 +34,13 @@ export const TabsNav: React.FC<TabsNavProps> = ({
     { id: 'split' as TabType, label: 'Dividir Cuentas (Split)', icon: Users },
     { id: 'planner' as TabType, label: 'Planificación Previa', icon: Calculator },
     { id: 'checklist' as TabType, label: 'Checklist & Pagos', icon: CheckSquare, badge: pendingChecklistCount > 0 ? pendingChecklistCount : undefined, badgeColor: 'bg-amber-500/20 text-amber-300 border-amber-500/30' },
+    { 
+      id: 'chat' as TabType, 
+      label: 'Asistente IA', 
+      icon: Sparkles,
+      badge: 'IA',
+      badgeColor: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/30'
+    },
     { 
       id: 'plans' as TabType, 
       label: 'Planes & Precios', 

@@ -34,6 +34,7 @@ interface OverviewViewProps {
   onNavigateToExpenses?: () => void;
   onEditExpense?: (expense: Expense) => void;
   onExportCSV: () => void;
+  onOpenExportModal?: () => void;
 }
 
 export const OverviewView: React.FC<OverviewViewProps> = ({
@@ -45,6 +46,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
   onNavigateToExpenses,
   onEditExpense,
   onExportCSV,
+  onOpenExportModal,
 }) => {
   // Calculate total spent in home currency
   const totalSpentHome = expenses.reduce((acc, curr) => {
@@ -109,12 +111,12 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
               <span>+ Registrar Gasto</span>
             </button>
             <button
-              onClick={onExportCSV}
-              className="bg-slate-900/60 hover:bg-slate-800 text-slate-200 text-xs font-semibold px-4 py-3 rounded-2xl border border-white/10 flex items-center space-x-1.5 transition"
-              title="Descargar reporte en formato CSV"
+              onClick={onOpenExportModal || onExportCSV}
+              className="bg-slate-900/80 hover:bg-slate-800 text-slate-200 text-xs font-semibold px-4 py-3 rounded-2xl border border-white/10 flex items-center space-x-2 transition shadow-md"
+              title="Exportar informe profesional a PDF, JSON o CSV"
             >
               <Download className="w-4 h-4 text-blue-400" />
-              <span className="hidden sm:inline">Exportar CSV</span>
+              <span>Exportar</span>
             </button>
             <button
               onClick={onOpenEditTripModal}

@@ -16,7 +16,7 @@ import {
   ArrowRight
 } from 'lucide-react';
 import { User, CurrencyCode, UserSubscription } from '../types';
-import { CURRENCIES } from '../data/currencies';
+import { CURRENCIES, CURRENCIES_BY_REGION } from '../data/currencies';
 import { formatMoney } from '../utils/finance';
 
 interface ProfileViewProps {
@@ -25,6 +25,7 @@ interface ProfileViewProps {
   onOpenPlans?: () => void;
   onUpdateBaseCurrency: (currency: CurrencyCode) => void;
   onExportAllJSON: () => void;
+  onOpenExportModal?: () => void;
   onShowToast: (msg: string, type: 'success' | 'info' | 'warning') => void;
 }
 
@@ -34,6 +35,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   onOpenPlans,
   onUpdateBaseCurrency,
   onExportAllJSON,
+  onOpenExportModal,
   onShowToast,
 }) => {
   // Live Currency Converter state
@@ -114,12 +116,16 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             <select
               value={currentUser.homeCurrency}
               onChange={(e) => handleBaseCurrencyChange(e.target.value as CurrencyCode)}
-              className="w-full sm:w-48 bg-slate-900 border border-white/10 rounded-xl py-2 px-3 text-white text-xs font-semibold focus:border-blue-500 focus:outline-none"
+              className="w-full sm:w-60 bg-slate-900 border border-white/10 rounded-xl py-2 px-3 text-white text-xs font-semibold focus:border-blue-500 focus:outline-none"
             >
-              {Object.values(CURRENCIES).map((c) => (
-                <option key={c.code} value={c.code}>
-                  {c.flag} {c.code} - {c.name}
-                </option>
+              {CURRENCIES_BY_REGION.map((group) => (
+                <optgroup key={group.region} label={group.region} className="bg-slate-900 text-slate-300 font-semibold">
+                  {group.currencies.map((c) => (
+                    <option key={c.code} value={c.code} className="bg-slate-950 text-white">
+                      {c.flag} {c.code} - {c.name} ({c.symbol})
+                    </option>
+                  ))}
+                </optgroup>
               ))}
             </select>
           </div>
@@ -149,10 +155,14 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                 onChange={(e) => setCalcFrom(e.target.value as CurrencyCode)}
                 className="bg-slate-900 border border-white/10 rounded-2xl px-3 text-white text-xs focus:border-blue-500 focus:outline-none"
               >
-                {Object.values(CURRENCIES).map((c) => (
-                  <option key={c.code} value={c.code}>
-                    {c.flag} {c.code}
-                  </option>
+                {CURRENCIES_BY_REGION.map((group) => (
+                  <optgroup key={group.region} label={group.region} className="bg-slate-900 text-slate-300 font-semibold">
+                    {group.currencies.map((c) => (
+                      <option key={c.code} value={c.code} className="bg-slate-950 text-white">
+                        {c.flag} {c.code} ({c.symbol})
+                      </option>
+                    ))}
+                  </optgroup>
                 ))}
               </select>
             </div>
@@ -166,10 +176,14 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
               onChange={(e) => setCalcTo(e.target.value as CurrencyCode)}
               className="w-full bg-slate-900/80 border border-white/10 rounded-2xl p-3 text-white text-xs focus:border-blue-500 focus:outline-none"
             >
-              {Object.values(CURRENCIES).map((c) => (
-                <option key={c.code} value={c.code}>
-                  {c.flag} {c.code} - {c.name}
-                </option>
+              {CURRENCIES_BY_REGION.map((group) => (
+                <optgroup key={group.region} label={group.region} className="bg-slate-900 text-slate-300 font-semibold">
+                  {group.currencies.map((c) => (
+                    <option key={c.code} value={c.code} className="bg-slate-950 text-white">
+                      {c.flag} {c.code} - {c.name} ({c.symbol})
+                    </option>
+                  ))}
+                </optgroup>
               ))}
             </select>
           </div>
@@ -211,17 +225,27 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
               <Download className="w-4 h-4 text-blue-400" /> Exportar y Respaldar Viajes
             </h3>
             <p className="text-slate-300 leading-relaxed">
-              Descarga una copia completa de todos tus viajes, gastos, checklists y planes en un archivo estructurado JSON para conservarlo como archivo histórico.
+              Genera informes ejecutivos en PDF de alta presentación con análisis y resumen financiero elaborado por Inteligencia Artificial, o descarga tu portafolio completo en formato JSON estructurado y planillas CSV.
             </p>
           </div>
 
-          <button
-            onClick={onExportAllJSON}
-            className="w-full bg-white/5 hover:bg-white/10 text-white font-bold py-3.5 rounded-2xl border border-white/10 flex items-center justify-center space-x-2 transition"
-          >
-            <Download className="w-4 h-4 text-blue-400" />
-            <span>Descargar Respaldo Completo (JSON)</span>
-          </button>
+          <div className="space-y-2 pt-2">
+            {onOpenExportModal && (
+              <button
+                onClick={onOpenExportModal}
+                className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3.5 rounded-2xl shadow-lg shadow-blue-600/25 flex items-center justify-center space-x-2 transition active:scale-[0.98]"
+              >
+                <Download className="w-4 h-4 text-white" />
+                <span>Exportar Informe PDF / JSON / CSV</span>
+              </button>
+            )}
+            <button
+              onClick={onExportAllJSON}
+              className="w-full bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white font-semibold py-2.5 rounded-xl border border-white/10 flex items-center justify-center space-x-2 transition text-xs"
+            >
+              <span>Descarga Rápida de Respaldo JSON (v2.1)</span>
+            </button>
+          </div>
         </div>
       </div>
     </div>
