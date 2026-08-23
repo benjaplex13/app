@@ -67,6 +67,28 @@ export const PLAN_LIMITS: Record<PlanTier, PlanLimits> = {
     canBusinessTripMode: true,
     canProactiveAiAdvisor: true,
   },
+  developer: {
+    maxActiveTrips: 999999,
+    maxCurrenciesPerTrip: 999999,
+    canSplitExpenses: true,
+    canExportReports: true,
+    canAutoSettleDebts: true,
+    canMonthlyEmailSummary: true,
+    canAiBudgetRecommendations: true,
+    hasAdvancedBudgetAlerts: true,
+    // 5 Pro Features
+    canScanReceiptsOcr: true,
+    canOfflineSync: true,
+    canRealTimeFx: true,
+    canBudgetAlerts: true,
+    canPwaWidget: true,
+    // 5 Premium Features & Future Experimental Features
+    canBankSync: true,
+    canMultiCurrencyDebtSettlement: true,
+    canCrossTripAnalytics: true,
+    canBusinessTripMode: true,
+    canProactiveAiAdvisor: true,
+  },
 };
 
 export const PLANS_DATA: PlanPricing[] = [

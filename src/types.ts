@@ -242,7 +242,7 @@ export interface ChatMessage {
   timestamp: string;
 }
 
-export type PlanTier = 'free' | 'pro' | 'premium';
+export type PlanTier = 'free' | 'pro' | 'premium' | 'developer';
 export type BillingCycle = 'monthly' | 'annual';
 export type SubscriptionStatus = 'active' | 'canceled' | 'past_due' | 'expired';
 

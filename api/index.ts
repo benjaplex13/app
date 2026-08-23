@@ -55,9 +55,18 @@ export interface ExpenseDoc {
   createdAt: string;
 }
 
-export type PlanTier = 'free' | 'pro' | 'premium';
+export type PlanTier = 'free' | 'pro' | 'premium' | 'developer';
 export type BillingCycle = 'monthly' | 'annual';
 export type SubscriptionStatus = 'active' | 'canceled' | 'past_due' | 'expired';
+
+export function isOwnerEmail(email?: string | null): boolean {
+  if (!email || typeof email !== 'string') return false;
+  const normalized = email.trim().toLowerCase();
+  const ownerEnv = (process.env.OWNER_EMAIL || '').trim().toLowerCase();
+  if (ownerEnv && normalized === ownerEnv) return true;
+  if (normalized === 'benchomateosa@gmail.com') return true;
+  return false;
+}
 
 export interface SubscriptionDoc {
   id: string;
@@ -788,6 +797,8 @@ export class DailyAiQuotaTracker {
 
   public getLimitForPlan(plan: string): number {
     switch (plan.toLowerCase()) {
+      case 'developer':
+        return 999999;
       case 'premium':
         return 50;
       case 'pro':
@@ -1109,12 +1120,95 @@ export async function getUserSubscription(userId: string): Promise<UserSubscript
   const supabase = getSupabase();
   const flowConfig = getFlowConfig();
 
+  // 1. Check if user is the Owner/Developer account via verified database record
+  let isOwner = false;
+  try {
+    const { data: userRow } = await supabase
+      .from('users')
+      .select('email')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (userRow?.email && isOwnerEmail(userRow.email)) {
+      isOwner = true;
+    }
+  } catch (userErr) {
+    console.warn('[Subscriptions] Could not check user email for owner check:', userErr);
+  }
+
   // Try to find existing subscription row
   const { data: subRow } = await supabase
     .from('subscriptions')
     .select('*')
     .eq('user_id', userId)
     .maybeSingle();
+
+  // If user is owner, enforce Developer plan with active status permanently
+  if (isOwner) {
+    const nowIso = new Date().toISOString();
+    const devSubId = subRow?.id || 'sub_' + userId;
+
+    if (!subRow || subRow.plan !== 'developer' || subRow.status !== 'active') {
+      try {
+        await supabase
+          .from('subscriptions')
+          .upsert(
+            {
+              id: devSubId,
+              user_id: userId,
+              plan: 'developer',
+              billing_cycle: 'annual',
+              status: 'active',
+              provider: null,
+              provider_subscription_id: 'owner_master_account',
+              current_period_end: null,
+              created_at: subRow?.created_at || nowIso,
+              updated_at: nowIso,
+            },
+            { onConflict: 'user_id' }
+          );
+      } catch (upsertErr) {
+        console.warn('[Subscriptions] Owner developer upsert warning:', upsertErr);
+      }
+    }
+
+    return {
+      id: devSubId,
+      userId,
+      plan: 'developer',
+      billingCycle: 'annual',
+      status: 'active',
+      provider: null,
+      providerSubscriptionId: 'owner_master_account',
+      currentPeriodEnd: null,
+      createdAt: subRow?.created_at || nowIso,
+      updatedAt: nowIso,
+      limits: {
+        maxActiveTrips: 999999,
+        maxCurrenciesPerTrip: 999999,
+        canSplitExpenses: true,
+        canExportReports: true,
+        canAutoSettleDebts: true,
+        canReceiveMonthlyEmailSummary: true,
+        canSmartBudgetRecommendations: true,
+        canScanReceiptsOcr: true,
+        canOfflineSync: true,
+        canRealTimeFx: true,
+        canBudgetAlerts: true,
+        canPwaWidget: true,
+        canBankSync: true,
+        canMultiCurrencyDebtSettlement: true,
+        canCrossTripAnalytics: true,
+        canBusinessTripMode: true,
+        canProactiveAiAdvisor: true,
+      },
+      diagnostics: {
+        flowConfigured: flowConfig.isConfigured,
+        flowSandbox: flowConfig.isSandbox,
+        flowEndpoint: flowConfig.endpoint,
+      },
+    };
+  }
 
   let sub: SubscriptionDoc;
 
@@ -1186,6 +1280,9 @@ export async function getUserSubscription(userId: string): Promise<UserSubscript
     }
   }
 
+  const isProOrAbove = effectivePlan === 'pro' || effectivePlan === 'premium' || effectivePlan === 'developer';
+  const isPremiumOrAbove = effectivePlan === 'premium' || effectivePlan === 'developer';
+
   return {
     id: sub.id,
     userId: sub.userId,
@@ -1200,21 +1297,21 @@ export async function getUserSubscription(userId: string): Promise<UserSubscript
     limits: {
       maxActiveTrips: effectivePlan === 'free' ? 1 : 999999,
       maxCurrenciesPerTrip: effectivePlan === 'free' ? 2 : 999999,
-      canSplitExpenses: effectivePlan !== 'free',
-      canExportReports: effectivePlan !== 'free',
-      canAutoSettleDebts: effectivePlan === 'premium',
-      canReceiveMonthlyEmailSummary: effectivePlan === 'premium',
-      canSmartBudgetRecommendations: effectivePlan === 'premium',
-      canScanReceiptsOcr: effectivePlan !== 'free',
-      canOfflineSync: effectivePlan !== 'free',
-      canRealTimeFx: effectivePlan !== 'free',
-      canBudgetAlerts: effectivePlan !== 'free',
-      canPwaWidget: effectivePlan !== 'free',
-      canBankSync: effectivePlan === 'premium',
-      canMultiCurrencyDebtSettlement: effectivePlan === 'premium',
-      canCrossTripAnalytics: effectivePlan === 'premium',
-      canBusinessTripMode: effectivePlan === 'premium',
-      canProactiveAiAdvisor: effectivePlan === 'premium',
+      canSplitExpenses: isProOrAbove,
+      canExportReports: isProOrAbove,
+      canAutoSettleDebts: isPremiumOrAbove,
+      canReceiveMonthlyEmailSummary: isPremiumOrAbove,
+      canSmartBudgetRecommendations: isPremiumOrAbove,
+      canScanReceiptsOcr: isProOrAbove,
+      canOfflineSync: isProOrAbove,
+      canRealTimeFx: isProOrAbove,
+      canBudgetAlerts: isProOrAbove,
+      canPwaWidget: isProOrAbove,
+      canBankSync: isPremiumOrAbove,
+      canMultiCurrencyDebtSettlement: isPremiumOrAbove,
+      canCrossTripAnalytics: isPremiumOrAbove,
+      canBusinessTripMode: isPremiumOrAbove,
+      canProactiveAiAdvisor: isPremiumOrAbove,
     },
     diagnostics: {
       flowConfigured: flowConfig.isConfigured,
