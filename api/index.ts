@@ -2329,6 +2329,17 @@ app.post('/api/expenses', verifyAuth, async (req: AuthenticatedRequest, res: Res
       });
     }
 
+    // Validate and sanitize expense fields
+    const sanitizedTitle = sanitizeString(expData.title || 'Gasto', 200);
+    const validAmount = validateNumeric(expData.amount, 0, 10_000_000_000, 0);
+    const validCurrency = validateCurrencyCode(expData.currency, targetTrip.currency || 'USD');
+    const validCategory = sanitizeString(expData.category || 'Otros', 50);
+    const validDate = validateDateString(expData.date);
+    const validPaidBy = sanitizeString(expData.paidBy || 'Yo', 100);
+    const validNotes = sanitizeString(expData.notes || '', 1000);
+    const validInvoice = sanitizeString(expData.invoiceNumber || '', 100);
+    const validMerchant = sanitizeString(expData.merchantName || '', 150);
+
     if (expData.id) {
       const { data: existingExp } = await supabase
         .from('expenses')
@@ -2342,17 +2353,17 @@ app.post('/api/expenses', verifyAuth, async (req: AuthenticatedRequest, res: Res
         }
 
         const updatePayload: any = {
-          title: expData.title || existingExp.title,
-          amount: Number(expData.amount) !== undefined ? Number(expData.amount) : existingExp.amount,
-          currency: expData.currency || existingExp.currency,
-          category: expData.category || existingExp.category,
-          date: expData.date || existingExp.date,
-          paid_by: expData.paidBy || existingExp.paid_by,
+          title: expData.title ? sanitizedTitle : existingExp.title,
+          amount: expData.amount !== undefined ? validAmount : existingExp.amount,
+          currency: expData.currency ? validCurrency : existingExp.currency,
+          category: expData.category ? validCategory : existingExp.category,
+          date: expData.date ? validDate : existingExp.date,
+          paid_by: expData.paidBy ? validPaidBy : existingExp.paid_by,
           split_between: splitList,
-          notes: expData.notes !== undefined ? expData.notes : existingExp.notes,
+          notes: expData.notes !== undefined ? validNotes : existingExp.notes,
           is_tax_deductible: expData.isTaxDeductible !== undefined ? Boolean(expData.isTaxDeductible) : existingExp.is_tax_deductible,
-          invoice_number: expData.invoiceNumber !== undefined ? expData.invoiceNumber : existingExp.invoice_number,
-          merchant_name: expData.merchantName !== undefined ? expData.merchantName : existingExp.merchant_name,
+          invoice_number: expData.invoiceNumber !== undefined ? validInvoice : existingExp.invoice_number,
+          merchant_name: expData.merchantName !== undefined ? validMerchant : existingExp.merchant_name,
         };
 
         const { data: updatedRow, error: updateError } = await supabase
@@ -2369,28 +2380,28 @@ app.post('/api/expenses', verifyAuth, async (req: AuthenticatedRequest, res: Res
     }
 
     // Base expense insert payload
-    const newExpId = expData.id || 'exp_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+    const newExpId = expData.id ? sanitizeString(expData.id, 64) : 'exp_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
     const baseExpPayload: any = {
       id: newExpId,
       trip_id: expData.tripId,
       user_id: userId,
-      title: expData.title || 'Gasto',
-      amount: Number(expData.amount) || 0,
-      currency: expData.currency || targetTrip.currency,
-      category: expData.category || 'Comida',
-      date: expData.date || new Date().toISOString().split('T')[0],
-      paid_by: expData.paidBy || 'Yo',
+      title: sanitizedTitle,
+      amount: validAmount,
+      currency: validCurrency,
+      category: validCategory,
+      date: validDate,
+      paid_by: validPaidBy,
       split_between: splitList,
-      notes: expData.notes || '',
-      created_at: expData.createdAt || new Date().toISOString(),
+      notes: validNotes,
+      created_at: expData.createdAt ? validateDateString(expData.createdAt) : new Date().toISOString(),
     };
 
     let insertedExpRow: any = null;
     const fullExpPayload = {
       ...baseExpPayload,
       is_tax_deductible: Boolean(expData.isTaxDeductible),
-      invoice_number: expData.invoiceNumber || '',
-      merchant_name: expData.merchantName || '',
+      invoice_number: validInvoice,
+      merchant_name: validMerchant,
     };
 
     const { data: fullExpData, error: insertError } = await supabase
