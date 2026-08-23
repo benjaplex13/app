@@ -181,7 +181,15 @@ export const api = {
 
   // AI Chatbot (Pro & Premium)
   async sendChatMessage(messages: { role: 'user' | 'assistant'; content: string }[], currentTripId?: string | null) {
-    return apiFetch<{ reply: string }>('/api/ai/chat', {
+    return apiFetch<{
+      reply: string;
+      quota?: {
+        limit: number;
+        used: number;
+        remaining: number;
+        plan: string;
+      };
+    }>('/api/ai/chat', {
       method: 'POST',
       body: JSON.stringify({ messages, currentTripId }),
     });
@@ -394,11 +402,26 @@ export const api = {
   async getHealth() {
     return apiFetch<{
       status: string;
-      realEmailConfigured: boolean;
-      resendFrom: string;
       service: string;
+      database: string;
+      supabaseDiagnostics: any;
+      resendDiagnostics: any;
+      geminiDiagnostics: {
+        varPresent: boolean;
+        detectedSourceVar: string | null;
+        keyLength: number;
+        keyPrefix: string;
+        clientInitialized: boolean;
+        initError: string | null;
+        allGeminiRelatedKeys: any[];
+      };
+      flowDiagnostics: any;
+      realEmailConfigured: boolean;
+      geminiConfigured: boolean;
+      resendFrom: string;
       demoOtpActive?: boolean;
       demoOtpCode?: string | null;
+      timestamp: string;
     }>('/api/health');
   },
 

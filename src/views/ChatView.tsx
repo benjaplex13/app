@@ -45,11 +45,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
   onOpenUpgradeGate,
 }) => {
   const isProOrPremium = subscription?.plan === 'pro' || subscription?.plan === 'premium';
+  const defaultLimit = subscription?.plan === 'premium' ? 50 : 20;
+
   const [selectedTripId, setSelectedTripId] = useState<string | null>(activeTrip?.id || (trips.length > 0 ? trips[0].id : null));
   const [inputMessage, setInputMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [quotaInfo, setQuotaInfo] = useState<{ limit: number; remaining: number; used: number } | null>(null);
+  const [isDailyLimitReached, setIsDailyLimitReached] = useState(false);
 
   const initialGreeting: ChatMessage = {
     id: 'welcome-msg',
@@ -133,6 +137,13 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
       const res = await api.sendChatMessage(apiPayload, selectedTripId);
 
+      if (res.quota) {
+        setQuotaInfo(res.quota);
+        if (res.quota.remaining <= 0) {
+          setIsDailyLimitReached(true);
+        }
+      }
+
       const aiReply: ChatMessage = {
         id: 'ai_' + Date.now(),
         role: 'assistant',
@@ -146,7 +157,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
       const errMsg = err.message || 'Error al comunicarse con el asistente de IA.';
       setErrorBanner(errMsg);
       
-      if (err.data?.missingApiKey) {
+      if (err.data?.code === 'DAILY_AI_LIMIT_REACHED' || err.status === 429) {
+        setIsDailyLimitReached(true);
+        setQuotaInfo({
+          limit: err.data?.limit || defaultLimit,
+          used: err.data?.used || defaultLimit,
+          remaining: 0,
+        });
+        onShowToast('Llegaste al límite diario de mensajes del Asistente de IA. Vuelve mañana.', 'warning');
+      } else if (err.data?.missingApiKey) {
         onShowToast('GEMINI_API_KEY no está configurada en las variables de entorno del servidor.', 'warning');
       } else {
         onShowToast(errMsg, 'error');
@@ -211,6 +230,27 @@ export const ChatView: React.FC<ChatViewProps> = ({
           </div>
 
           <div className="flex items-center gap-3">
+            {/* Daily Message Quota Badge */}
+            {isProOrPremium && (
+              <div 
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-2xl border text-xs font-medium transition ${
+                  isDailyLimitReached
+                    ? 'bg-rose-950/60 border-rose-500/40 text-rose-300'
+                    : (quotaInfo && quotaInfo.remaining <= 5)
+                    ? 'bg-amber-950/60 border-amber-500/40 text-amber-300'
+                    : 'bg-cyan-950/60 border-cyan-500/30 text-cyan-300'
+                }`}
+                title={`Límite diario: ${defaultLimit} mensajes por día para tu plan.`}
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>
+                  {quotaInfo 
+                    ? `${quotaInfo.remaining} / ${quotaInfo.limit} msgs hoy`
+                    : `${defaultLimit} msgs/día`}
+                </span>
+              </div>
+            )}
+
             {/* Trip selector for context */}
             {trips.length > 0 && (
               <div className="flex items-center bg-slate-900/80 border border-white/10 rounded-2xl px-3 py-1.5 text-xs text-slate-300">
@@ -414,31 +454,55 @@ export const ChatView: React.FC<ChatViewProps> = ({
           </div>
 
           {/* Chat Input Bar */}
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              handleSendMessage();
-            }}
-            className="p-4 bg-[#070b16] border-t border-white/10 flex items-center gap-3"
-          >
-            <input
-              type="text"
-              value={inputMessage}
-              onChange={(e) => setInputMessage(e.target.value)}
-              placeholder="Haz una pregunta sobre tus viajes, presupuestos o gastos..."
-              disabled={isLoading}
-              className="flex-1 bg-slate-900/90 border border-white/10 rounded-2xl px-4 py-3 text-xs sm:text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition disabled:opacity-50"
-            />
+          {isDailyLimitReached ? (
+            <div className="p-4 bg-gradient-to-r from-rose-950/70 via-[#070b16] to-[#070b16] border-t border-rose-500/30 flex flex-col sm:flex-row items-center justify-between gap-3 animate-fadeIn">
+              <div className="flex items-center gap-2.5 text-xs text-rose-200">
+                <div className="w-8 h-8 rounded-xl bg-rose-500/20 border border-rose-500/30 flex items-center justify-center shrink-0">
+                  <Lock className="w-4 h-4 text-rose-400" />
+                </div>
+                <div>
+                  <p className="font-bold text-white">Llegaste al límite de mensajes de hoy ({quotaInfo?.limit || defaultLimit} mensajes/día)</p>
+                  <p className="text-[11px] text-slate-400">Vuelve mañana para seguir consultando o actualiza a un plan superior si necesitas mayor cuota.</p>
+                </div>
+              </div>
 
-            <button
-              type="submit"
-              disabled={!inputMessage.trim() || isLoading}
-              className="bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 disabled:from-slate-800 disabled:to-slate-800 disabled:text-slate-600 text-white font-bold p-3 rounded-2xl shadow-lg shadow-cyan-500/20 transition active:scale-95 flex items-center justify-center shrink-0"
-              aria-label="Enviar mensaje"
+              {subscription?.plan === 'pro' && (
+                <button
+                  onClick={() => onOpenUpgradeGate('Aumentar cuota a 50 msgs/día', 'El Plan Premium incluye 50 mensajes diarios con Rumbio AI Copilot y análisis avanzado multidivisa.', 'premium')}
+                  className="bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-xs px-4 py-2 rounded-xl transition shadow-lg shadow-amber-500/20 shrink-0 flex items-center gap-1.5"
+                >
+                  <Crown className="w-3.5 h-3.5" />
+                  <span>Subir a Premium (50 msgs/día)</span>
+                </button>
+              )}
+            </div>
+          ) : (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleSendMessage();
+              }}
+              className="p-4 bg-[#070b16] border-t border-white/10 flex items-center gap-3"
             >
-              <Send className="w-4 h-4" />
-            </button>
-          </form>
+              <input
+                type="text"
+                value={inputMessage}
+                onChange={(e) => setInputMessage(e.target.value)}
+                placeholder="Haz una pregunta sobre tus viajes, presupuestos o gastos..."
+                disabled={isLoading || isDailyLimitReached}
+                className="flex-1 bg-slate-900/90 border border-white/10 rounded-2xl px-4 py-3 text-xs sm:text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition disabled:opacity-50"
+              />
+
+              <button
+                type="submit"
+                disabled={!inputMessage.trim() || isLoading || isDailyLimitReached}
+                className="bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 disabled:from-slate-800 disabled:to-slate-800 disabled:text-slate-600 text-white font-bold p-3 rounded-2xl shadow-lg shadow-cyan-500/20 transition active:scale-95 flex items-center justify-center shrink-0"
+                aria-label="Enviar mensaje"
+              >
+                <Send className="w-4 h-4" />
+              </button>
+            </form>
+          )}
         </div>
       )}
     </div>

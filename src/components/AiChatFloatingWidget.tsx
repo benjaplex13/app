@@ -42,8 +42,11 @@ export const AiChatFloatingWidget: React.FC<AiChatFloatingWidgetProps> = ({
   const [inputMessage, setInputMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
+  const [isDailyLimitReached, setIsDailyLimitReached] = useState(false);
+  const [quotaInfo, setQuotaInfo] = useState<{ limit: number; remaining: number } | null>(null);
 
   const isProOrPremium = subscription?.plan === 'pro' || subscription?.plan === 'premium';
+  const defaultLimit = subscription?.plan === 'premium' ? 50 : 20;
 
   const initialGreeting: ChatMessage = {
     id: 'floating-welcome',
@@ -99,6 +102,13 @@ export const AiChatFloatingWidget: React.FC<AiChatFloatingWidgetProps> = ({
 
       const res = await api.sendChatMessage(apiPayload, activeTrip?.id);
 
+      if (res.quota) {
+        setQuotaInfo(res.quota);
+        if (res.quota.remaining <= 0) {
+          setIsDailyLimitReached(true);
+        }
+      }
+
       const aiReply: ChatMessage = {
         id: 'ai_' + Date.now(),
         role: 'assistant',
@@ -111,7 +121,14 @@ export const AiChatFloatingWidget: React.FC<AiChatFloatingWidgetProps> = ({
       console.error('Error in floating chat:', err);
       const errMsg = err.message || 'Error al comunicarse con el asistente de IA.';
       setErrorBanner(errMsg);
-      if (err.data?.missingApiKey) {
+      if (err.data?.code === 'DAILY_AI_LIMIT_REACHED' || err.status === 429) {
+        setIsDailyLimitReached(true);
+        setQuotaInfo({
+          limit: err.data?.limit || defaultLimit,
+          remaining: 0,
+        });
+        onShowToast('Llegaste al límite diario de mensajes del Asistente de IA. Vuelve mañana.', 'warning');
+      } else if (err.data?.missingApiKey) {
         onShowToast('GEMINI_API_KEY no está configurada en las variables de entorno del servidor.', 'warning');
       } else {
         onShowToast(errMsg, 'error');
@@ -282,30 +299,50 @@ export const AiChatFloatingWidget: React.FC<AiChatFloatingWidgetProps> = ({
           </div>
 
           {/* Input Form */}
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              handleSendMessage();
-            }}
-            className="p-3 bg-[#070b16] border-t border-white/10 flex items-center gap-2"
-          >
-            <input
-              type="text"
-              value={inputMessage}
-              onChange={(e) => setInputMessage(e.target.value)}
-              placeholder="Pregunta a Rumbio AI..."
-              disabled={isLoading}
-              className="flex-1 bg-slate-900 border border-white/10 rounded-xl px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition"
-            />
-            <button
-              type="submit"
-              disabled={!inputMessage.trim() || isLoading}
-              className="bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 disabled:from-slate-800 disabled:to-slate-800 disabled:text-slate-600 text-white font-bold p-2.5 rounded-xl transition shrink-0"
-              aria-label="Enviar mensaje"
+          {isDailyLimitReached ? (
+            <div className="p-3 bg-gradient-to-r from-rose-950/70 to-[#070b16] border-t border-rose-500/30 text-[11px] text-rose-200 flex items-center justify-between gap-2 animate-fadeIn">
+              <div className="flex items-center gap-2">
+                <Lock className="w-4 h-4 text-rose-400 shrink-0" />
+                <span>Llegaste al límite diario ({quotaInfo?.limit || defaultLimit} msgs/día). Vuelve mañana.</span>
+              </div>
+              {subscription?.plan === 'pro' && (
+                <button
+                  onClick={() => {
+                    setIsOpen(false);
+                    onOpenUpgradeGate('Límite de mensajes alcanzado', 'Actualiza a Premium para disfrutar de 50 mensajes diarios con Rumbio AI Copilot.', 'premium');
+                  }}
+                  className="bg-amber-500 text-slate-950 font-bold px-2 py-1 rounded text-[10px] shrink-0"
+                >
+                  Subir a Premium
+                </button>
+              )}
+            </div>
+          ) : (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleSendMessage();
+              }}
+              className="p-3 bg-[#070b16] border-t border-white/10 flex items-center gap-2"
             >
-              <Send className="w-3.5 h-3.5" />
-            </button>
-          </form>
+              <input
+                type="text"
+                value={inputMessage}
+                onChange={(e) => setInputMessage(e.target.value)}
+                placeholder="Pregunta a Rumbio AI..."
+                disabled={isLoading || isDailyLimitReached}
+                className="flex-1 bg-slate-900 border border-white/10 rounded-xl px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition disabled:opacity-50"
+              />
+              <button
+                type="submit"
+                disabled={!inputMessage.trim() || isLoading || isDailyLimitReached}
+                className="bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 disabled:from-slate-800 disabled:to-slate-800 disabled:text-slate-600 text-white font-bold p-2.5 rounded-xl transition shrink-0"
+                aria-label="Enviar mensaje"
+              >
+                <Send className="w-3.5 h-3.5" />
+              </button>
+            </form>
+          )}
         </div>
       )}
     </>

@@ -317,6 +317,123 @@ function getResendClient(): Resend | null {
 }
 
 // ============================================================================
+// GEMINI CLIENT & DIAGNOSTICS (Lazy Initialization, Key Scanner & Safe Inspection)
+// ============================================================================
+export function findGeminiKeyInEnv(): { key: string; sourceVar: string } | null {
+  // 1. Direct check with exact standard names
+  const directCandidates = [
+    'GEMINI_API_KEY',
+    'GOOGLE_GENAI_API_KEY',
+    'GOOGLE_API_KEY',
+    'GEMINI_KEY',
+    'VITE_GEMINI_API_KEY',
+    'VITE_GOOGLE_API_KEY',
+  ];
+
+  for (const varName of directCandidates) {
+    const val = process.env[varName];
+    if (val && typeof val === 'string' && val.trim().length > 0) {
+      return { key: val.trim(), sourceVar: varName };
+    }
+  }
+
+  // 2. Dynamic scan over all process.env keys for any variation (case-insensitive or with whitespace)
+  const allEnvKeys = Object.keys(process.env);
+  for (const rawKey of allEnvKeys) {
+    const upper = rawKey.trim().toUpperCase();
+    if (upper.includes('GEMINI') || (upper.includes('GOOGLE') && upper.includes('KEY'))) {
+      const val = process.env[rawKey];
+      if (val && typeof val === 'string' && val.trim().length > 0) {
+        return { key: val.trim(), sourceVar: rawKey };
+      }
+    }
+  }
+
+  return null;
+}
+
+export function getGeminiKeyDiagnostics() {
+  const allEnvKeys = Object.keys(process.env);
+
+  // Find all keys in process.env containing 'GEMINI' or ('GOOGLE' and 'KEY')
+  const geminiRelatedKeys = allEnvKeys
+    .filter((k) => {
+      const upper = k.trim().toUpperCase();
+      return upper.includes('GEMINI') || (upper.includes('GOOGLE') && upper.includes('KEY'));
+    })
+    .map((k) => {
+      const val = process.env[k] || '';
+      const trimmedVal = val.trim();
+      return {
+        name: k,
+        trimmedName: k.trim(),
+        valueLength: trimmedVal.length,
+        hasWhitespaceInKeyName: k !== k.trim(),
+        hasWhitespaceInValue: val !== trimmedVal,
+        keyPrefix: trimmedVal.length > 0 ? `${trimmedVal.substring(0, 6)}...` : 'none',
+      };
+    });
+
+  const foundKeyInfo = findGeminiKeyInEnv();
+  const activeKey = foundKeyInfo?.key || '';
+  const varPresent = activeKey.length > 0;
+
+  let clientInitialized = false;
+  let initError: string | null = null;
+
+  if (varPresent) {
+    try {
+      const client = new GoogleGenAI({
+        apiKey: activeKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          },
+        },
+      });
+      if (client && client.models) {
+        clientInitialized = true;
+      } else {
+        initError = 'El cliente de GoogleGenAI se instanció pero falta el módulo de models.';
+      }
+    } catch (err: any) {
+      initError = err.message || 'Error al instanciar el cliente de GoogleGenAI con la clave provista.';
+    }
+  }
+
+  return {
+    varPresent,
+    detectedSourceVar: foundKeyInfo ? foundKeyInfo.sourceVar : null,
+    keyLength: activeKey.length,
+    keyPrefix: activeKey.length > 0 ? `${activeKey.substring(0, 6)}...` : 'none',
+    clientInitialized,
+    initError,
+    allGeminiRelatedKeys: geminiRelatedKeys,
+  };
+}
+
+export function getGeminiClient(): { client: GoogleGenAI; apiKey: string } | null {
+  const found = findGeminiKeyInEnv();
+  if (!found || !found.key) {
+    return null;
+  }
+  try {
+    const client = new GoogleGenAI({
+      apiKey: found.key,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    });
+    return { client, apiKey: found.key };
+  } catch (err) {
+    console.error('[Gemini Init Error]', err);
+    return null;
+  }
+}
+
+// ============================================================================
 // DATA MAPPERS (Database snake_case <-> Application camelCase)
 // ============================================================================
 function mapUserFromDb(row: any): UserDoc {
@@ -617,6 +734,74 @@ export const otpRateLimiter = new InMemoryRateLimiter(5, 15 * 60 * 1000, 15 * 60
 export const resendOtpRateLimiter = new InMemoryRateLimiter(3, 15 * 60 * 1000, 15 * 60 * 1000);
 export const forgotPasswordRateLimiter = new InMemoryRateLimiter(3, 15 * 60 * 1000, 15 * 60 * 1000);
 export const resetPasswordRateLimiter = new InMemoryRateLimiter(5, 15 * 60 * 1000, 15 * 60 * 1000);
+
+// ============================================================================
+// DAILY AI MESSAGE QUOTA SYSTEM (Plan-based: Pro = 20 msgs/day, Premium = 50 msgs/day)
+// ============================================================================
+interface DailyAiQuotaRecord {
+  date: string; // YYYY-MM-DD
+  count: number;
+}
+
+export class DailyAiQuotaTracker {
+  private userUsage: Map<string, DailyAiQuotaRecord> = new Map();
+
+  private getTodayKey(): string {
+    return new Date().toISOString().split('T')[0];
+  }
+
+  public getLimitForPlan(plan: string): number {
+    switch (plan.toLowerCase()) {
+      case 'premium':
+        return 50;
+      case 'pro':
+        return 20;
+      default:
+        return 0; // Free has no direct chatbot access
+    }
+  }
+
+  public check(userId: string, plan: string): { allowed: boolean; used: number; limit: number; remaining: number } {
+    const today = this.getTodayKey();
+    const limit = this.getLimitForPlan(plan);
+    const record = this.userUsage.get(userId);
+
+    if (!record || record.date !== today) {
+      return { allowed: limit > 0, used: 0, limit, remaining: limit };
+    }
+
+    const remaining = Math.max(0, limit - record.count);
+    return {
+      allowed: record.count < limit,
+      used: record.count,
+      limit,
+      remaining,
+    };
+  }
+
+  public increment(userId: string, plan: string): { allowed: boolean; used: number; limit: number; remaining: number } {
+    const today = this.getTodayKey();
+    const limit = this.getLimitForPlan(plan);
+    let record = this.userUsage.get(userId);
+
+    if (!record || record.date !== today) {
+      record = { date: today, count: 1 };
+      this.userUsage.set(userId, record);
+      const remaining = Math.max(0, limit - 1);
+      return { allowed: true, used: 1, limit, remaining };
+    }
+
+    if (record.count >= limit) {
+      return { allowed: false, used: record.count, limit, remaining: 0 };
+    }
+
+    record.count += 1;
+    const remaining = Math.max(0, limit - record.count);
+    return { allowed: true, used: record.count, limit, remaining };
+  }
+}
+
+export const dailyAiQuotaTracker = new DailyAiQuotaTracker();
 
 export function getClientIp(req: Request): string {
   const forwarded = req.headers['x-forwarded-for'];
@@ -1035,9 +1220,10 @@ app.get('/api/auth/config', (req: Request, res: Response) => {
   });
 });
 
-// 1. Health & Config Status (Checks Supabase + Resend + Key Diagnostics + Demo Mode)
+// 1. Health & Config Status (Checks Supabase + Resend + Gemini + Flow + Demo Mode)
 app.get('/api/health', async (req: Request, res: Response) => {
   const resendDiagnostics = getResendKeyDiagnostics();
+  const geminiDiagnostics = getGeminiKeyDiagnostics();
   let supabaseStatus = 'disconnected';
   const supabaseDiagnostics = getSupabaseKeyDiagnostics();
   const demoConfig = getDemoOtpConfig();
@@ -1062,6 +1248,7 @@ app.get('/api/health', async (req: Request, res: Response) => {
     database: supabaseStatus,
     supabaseDiagnostics,
     resendDiagnostics,
+    geminiDiagnostics,
     flowDiagnostics: {
       configured: flowConfig.isConfigured,
       sandbox: flowConfig.isSandbox,
@@ -1072,6 +1259,7 @@ app.get('/api/health', async (req: Request, res: Response) => {
     demoOtpActive: demoConfig.demoOtpActive,
     demoOtpCode: demoConfig.demoOtpCode,
     realEmailConfigured: resendDiagnostics.clientInitialized,
+    geminiConfigured: geminiDiagnostics.clientInitialized,
     resendFrom: resendDiagnostics.fromEmail,
     timestamp: new Date().toISOString(),
   });
@@ -1955,21 +2143,45 @@ app.post('/api/subscriptions/cancel', verifyAuth, async (req: AuthenticatedReque
       return res.status(400).json({ error: 'No tienes una suscripción de pago activa para cancelar.' });
     }
 
-    // Update status to canceled, preserving current_period_end
-    const { error: updateError } = await supabase
-      .from('subscriptions')
-      .update({
+    // Check if current_period_end has a valid future timestamp
+    let hasValidFuturePeriod = false;
+    if (subRow.current_period_end) {
+      const endTime = new Date(subRow.current_period_end).getTime();
+      if (!isNaN(endTime) && endTime > Date.now()) {
+        hasValidFuturePeriod = true;
+      }
+    }
+
+    let updatePayload: any;
+    if (hasValidFuturePeriod) {
+      // Mark subscription as canceled; user maintains access until current_period_end
+      updatePayload = {
         status: 'canceled',
         updated_at: new Date().toISOString(),
-      })
+      };
+    } else {
+      // If current_period_end doesn't have a valid future date (e.g. demo test accounts), pass to free & active immediately
+      updatePayload = {
+        plan: 'free',
+        status: 'active',
+        billing_cycle: null,
+        current_period_end: null,
+        updated_at: new Date().toISOString(),
+      };
+    }
+
+    const { error: updateError } = await supabase
+      .from('subscriptions')
+      .update(updatePayload)
       .eq('user_id', userId);
 
     if (updateError) throw new Error(updateError.message);
 
     const subscription = await getUserSubscription(userId);
     res.json({
-      message:
-        'Suscripción cancelada. Mantendrás acceso a las funciones de tu plan hasta el final de tu período contratado.',
+      message: hasValidFuturePeriod
+        ? 'Suscripción cancelada. Mantendrás acceso a las funciones de tu plan hasta el final de tu período contratado.'
+        : 'Suscripción cancelada. Tu cuenta ha pasado al plan Gratis.',
       subscription,
     });
   } catch (err: any) {
@@ -2484,8 +2696,22 @@ async function handleAiChat(req: AuthenticatedRequest, res: Response) {
       });
     }
 
-    // 2. Validate GEMINI_API_KEY environment variable (strictly no mock responses)
-    const apiKey = process.env.GEMINI_API_KEY?.trim();
+    // 2. Check Daily Message Quota (20 msgs/day for Pro, 50 msgs/day for Premium)
+    const quotaCheck = dailyAiQuotaTracker.check(userId, subscription.plan);
+    if (!quotaCheck.allowed) {
+      return res.status(429).json({
+        error: `Llegaste al límite de mensajes de hoy (${quotaCheck.limit} mensajes/día en Plan ${subscription.plan.toUpperCase()}). Vuelve mañana para seguir consultando a tu Asistente de IA.`,
+        code: 'DAILY_AI_LIMIT_REACHED',
+        limit: quotaCheck.limit,
+        used: quotaCheck.used,
+        remaining: 0,
+        plan: subscription.plan,
+      });
+    }
+
+    // 3. Validate GEMINI_API_KEY environment variable (strictly no mock responses)
+    const geminiKeyInfo = findGeminiKeyInEnv();
+    const apiKey = geminiKeyInfo?.key;
     if (!apiKey) {
       return res.status(503).json({
         error: 'La clave de API de Gemini (GEMINI_API_KEY) no está configurada en las variables de entorno del servidor. Por favor, configúrala en el panel de Secrets de AI Studio o variables de entorno para activar las respuestas del Asistente IA.',
@@ -2494,13 +2720,13 @@ async function handleAiChat(req: AuthenticatedRequest, res: Response) {
       });
     }
 
-    // 3. Parse input messages & currentTripId
+    // 4. Parse input messages & currentTripId
     const { messages, currentTripId } = req.body;
     if (!Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: 'Debes proporcionar una lista de mensajes válida para la conversación.' });
     }
 
-    // 4. Fetch User Data (Profile, Trips, Expenses) for real-data context
+    // 5. Fetch User Data (Profile, Trips, Expenses) for real-data context
     const { data: userRow } = await supabase
       .from('users')
       .select('name, email, home_currency')
@@ -2656,7 +2882,19 @@ DIRECTIVAS Y REGLAS FUNDAMENTALES:
     });
 
     const replyText = geminiResponse.text || 'No se pudo generar una respuesta en este momento.';
-    res.json({ reply: replyText });
+
+    // Increment daily AI quota only after successful model response
+    const updatedQuota = dailyAiQuotaTracker.increment(userId, subscription.plan);
+
+    res.json({
+      reply: replyText,
+      quota: {
+        limit: updatedQuota.limit,
+        used: updatedQuota.used,
+        remaining: updatedQuota.remaining,
+        plan: subscription.plan,
+      },
+    });
   } catch (err: any) {
     console.error('Error in AI Chatbot API:', err);
     res.status(500).json({ error: err.message || 'Error al comunicarse con el Asistente de IA.' });
@@ -2731,7 +2969,8 @@ app.post('/api/ai/trip-summary', verifyAuth, async (req: any, res: any) => {
       }
     });
 
-    const apiKey = process.env.GEMINI_API_KEY;
+    const geminiInfo = findGeminiKeyInEnv();
+    const apiKey = geminiInfo?.key;
     if (!apiKey) {
       // Fallback algorithmic executive summary if API key is not configured
       const budgetPct = trip.budget > 0 ? Math.round((totalSpentInTripCurr / trip.budget) * 100) : 0;
@@ -2798,7 +3037,8 @@ app.post('/api/ai/scan-receipt', verifyAuth, async (req: AuthenticatedRequest, r
     }
 
     // 2. Validate GEMINI_API_KEY explicitly without simulated placeholders
-    const apiKey = process.env.GEMINI_API_KEY?.trim();
+    const geminiInfo = findGeminiKeyInEnv();
+    const apiKey = geminiInfo?.key;
     if (!apiKey) {
       return res.status(503).json({
         error: 'La clave de API de Gemini (GEMINI_API_KEY) no está configurada en las variables de entorno del servidor. Por favor, configúrala en el panel de Secrets de AI Studio para activar el escaneo inteligente de recibos con OCR.',
@@ -3516,7 +3756,8 @@ app.post('/api/ai/proactive-advice', verifyAuth, async (req: AuthenticatedReques
     });
 
     // Check if GEMINI_API_KEY is present for deep smart analysis
-    const apiKey = process.env.GEMINI_API_KEY?.trim();
+    const geminiInfo = findGeminiKeyInEnv();
+    const apiKey = geminiInfo?.key;
     let adviceItems: any[] = [];
 
     if (apiKey) {

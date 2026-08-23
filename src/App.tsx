@@ -508,6 +508,12 @@ export function App() {
                 currentUser={currentUser}
                 userSubscription={subscription}
                 onOpenPlans={() => setCurrentTab('plans')}
+                onRefreshSubscription={async (updatedSub) => {
+                  if (updatedSub) {
+                    setSubscription(updatedSub);
+                  }
+                  return await fetchSubscription();
+                }}
                 onUpdateBaseCurrency={handleUpdateBaseCurrency}
                 onExportAllJSON={handleExportAllJSON}
                 onOpenExportModal={() => setIsExportModalOpen(true)}

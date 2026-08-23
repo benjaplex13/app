@@ -13,26 +13,33 @@ import {
   RefreshCw,
   Crown,
   Zap,
-  ArrowRight
+  ArrowRight,
+  AlertCircle,
+  Clock,
+  XCircle,
+  Loader2
 } from 'lucide-react';
 import { User, CurrencyCode, UserSubscription } from '../types';
 import { CURRENCIES, CURRENCIES_BY_REGION } from '../data/currencies';
 import { formatMoney } from '../utils/finance';
+import { api } from '../utils/api';
 
 interface ProfileViewProps {
   currentUser: User;
   userSubscription?: UserSubscription | null;
   onOpenPlans?: () => void;
+  onRefreshSubscription?: (updatedSub?: UserSubscription) => Promise<any>;
   onUpdateBaseCurrency: (currency: CurrencyCode) => void;
   onExportAllJSON: () => void;
   onOpenExportModal?: () => void;
-  onShowToast: (msg: string, type: 'success' | 'info' | 'warning') => void;
+  onShowToast: (msg: string, type: 'success' | 'info' | 'warning' | 'error') => void;
 }
 
 export const ProfileView: React.FC<ProfileViewProps> = ({
   currentUser,
   userSubscription,
   onOpenPlans,
+  onRefreshSubscription,
   onUpdateBaseCurrency,
   onExportAllJSON,
   onOpenExportModal,
@@ -42,9 +49,28 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const [calcAmount, setCalcAmount] = useState('100');
   const [calcFrom, setCalcFrom] = useState<CurrencyCode>('USD');
   const [calcTo, setCalcTo] = useState<CurrencyCode>(currentUser.homeCurrency);
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+  const [canceling, setCanceling] = useState(false);
 
   const plan = userSubscription?.plan || 'free';
   const isPaid = plan !== 'free';
+  const isCanceled = userSubscription?.status === 'canceled';
+
+  const handleCancelSubscription = async () => {
+    setCanceling(true);
+    try {
+      const res = await api.cancelSubscription();
+      if (onRefreshSubscription) {
+        await onRefreshSubscription(res.subscription);
+      }
+      setShowCancelConfirm(false);
+      onShowToast(res.message || 'Suscripción cancelada.', 'success');
+    } catch (err: any) {
+      onShowToast(err.message || 'Error al cancelar la suscripción.', 'error');
+    } finally {
+      setCanceling(false);
+    }
+  };
 
   // Conversion math using approx table
   const numAmt = parseFloat(calcAmount) || 0;
@@ -85,26 +111,40 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         {/* Plan & Home Currency Preference */}
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full md:w-auto">
           {/* Plan badge box */}
-          <div className="p-4 bg-slate-900/60 rounded-2xl border border-white/5 flex items-center justify-between sm:justify-start gap-4">
-            <div>
-              <span className="block text-[10px] uppercase font-bold text-slate-400">Plan Actual</span>
-              <span className="text-sm font-bold text-white uppercase flex items-center gap-1.5 mt-0.5">
-                {plan === 'premium' ? (
-                  <Crown className="w-4 h-4 text-amber-400" />
-                ) : plan === 'pro' ? (
-                  <Sparkles className="w-4 h-4 text-cyan-400" />
-                ) : (
-                  <Zap className="w-4 h-4 text-slate-400" />
-                )}
-                {plan.toUpperCase()}
-              </span>
+          <div className="p-4 bg-slate-900/60 rounded-2xl border border-white/5 flex flex-col justify-between gap-3">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <span className="block text-[10px] uppercase font-bold text-slate-400">Plan Actual</span>
+                <span className="text-sm font-bold text-white uppercase flex items-center gap-1.5 mt-0.5">
+                  {plan === 'premium' ? (
+                    <Crown className="w-4 h-4 text-amber-400" />
+                  ) : plan === 'pro' ? (
+                    <Sparkles className="w-4 h-4 text-cyan-400" />
+                  ) : (
+                    <Zap className="w-4 h-4 text-slate-400" />
+                  )}
+                  {plan.toUpperCase()}
+                </span>
+              </div>
+              {onOpenPlans && (
+                <button
+                  onClick={onOpenPlans}
+                  className="bg-blue-600/20 hover:bg-blue-600/40 text-cyan-300 border border-cyan-500/30 px-3 py-1.5 rounded-xl text-xs font-bold transition active:scale-95"
+                >
+                  {isPaid ? 'Ver Planes' : 'Mejorar'}
+                </button>
+              )}
             </div>
-            {onOpenPlans && (
+
+            {/* If paid and active, show Cancel button */}
+            {isPaid && userSubscription?.status === 'active' && (
               <button
-                onClick={onOpenPlans}
-                className="bg-blue-600/20 hover:bg-blue-600/40 text-cyan-300 border border-cyan-500/30 px-3 py-1.5 rounded-xl text-xs font-bold transition active:scale-95"
+                type="button"
+                onClick={() => setShowCancelConfirm(true)}
+                className="text-[11px] font-semibold text-rose-400 hover:text-rose-300 hover:underline flex items-center gap-1 transition self-start"
               >
-                {isPaid ? 'Gestionar' : 'Mejorar'}
+                <XCircle className="w-3.5 h-3.5" />
+                <span>Cancelar plan</span>
               </button>
             )}
           </div>
@@ -131,6 +171,33 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Subscription Canceled Banner if paid in grace period */}
+      {isPaid && isCanceled && (
+        <div className="bg-gradient-to-r from-amber-950/50 via-slate-900/90 to-[#070b16] border border-amber-500/40 rounded-2xl p-4 sm:p-5 flex items-start space-x-3.5 animate-fadeIn">
+          <Clock className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+          <div className="space-y-1">
+            <h4 className="text-xs sm:text-sm font-bold text-white">Estado de tu Suscripción: Cancelada</h4>
+            <p className="text-xs text-amber-200/90 leading-relaxed">
+              {userSubscription?.currentPeriodEnd ? (
+                <>
+                  Tu plan <b>{plan.toUpperCase()}</b> sigue activo hasta el{' '}
+                  <b>
+                    {new Date(userSubscription.currentPeriodEnd).toLocaleDateString('es-ES', {
+                      day: 'numeric',
+                      month: 'long',
+                      year: 'numeric',
+                    })}
+                  </b>
+                  , después pasarás a Gratis automáticamente.
+                </>
+              ) : (
+                <>Tu suscripción fue cancelada y tu cuenta pasará al plan Gratis automáticamente.</>
+              )}
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Interactive Live Currency Converter Calculator */}
       <div className="bg-white/5 p-8 rounded-[32px] border border-white/5">
@@ -248,6 +315,57 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Cancel Confirmation Modal */}
+      {showCancelConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fadeIn">
+          <div className="w-full max-w-md bg-[#070b16] border border-rose-500/30 rounded-3xl p-6 shadow-2xl text-white">
+            <div className="w-12 h-12 rounded-2xl bg-rose-950/60 border border-rose-500/40 flex items-center justify-center text-rose-400 mb-4">
+              <AlertCircle className="w-6 h-6" />
+            </div>
+
+            <h3 className="text-lg font-bold font-display text-white">
+              ¿Seguro que quieres cancelar tu plan {plan.toUpperCase()}?
+            </h3>
+            <p className="text-xs text-slate-300 mt-2.5 leading-relaxed">
+              {userSubscription?.currentPeriodEnd ? (
+                <>
+                  Mantendrás tu plan <b className="text-white">{plan.toUpperCase()}</b> activo hasta el{' '}
+                  <b className="text-cyan-300">
+                    {new Date(userSubscription.currentPeriodEnd).toLocaleDateString('es-ES', {
+                      day: 'numeric',
+                      month: 'long',
+                      year: 'numeric',
+                    })}
+                  </b>
+                  . Después pasarás al plan Gratis automáticamente sin cobros adicionales.
+                </>
+              ) : (
+                <>Tu cuenta pasará al plan Gratis de inmediato. Mantendrás todos tus viajes y datos históricos intactos.</>
+              )}
+            </p>
+
+            <div className="mt-6 flex items-center space-x-3">
+              <button
+                type="button"
+                onClick={() => setShowCancelConfirm(false)}
+                disabled={canceling}
+                className="flex-1 bg-white/5 hover:bg-white/10 text-white font-bold py-2.5 px-4 rounded-xl text-xs transition"
+              >
+                Mantener mi plan
+              </button>
+              <button
+                type="button"
+                onClick={handleCancelSubscription}
+                disabled={canceling}
+                className="flex-1 bg-rose-600 hover:bg-rose-500 text-white font-bold py-2.5 px-4 rounded-xl text-xs transition flex items-center justify-center space-x-2 shadow-lg shadow-rose-600/20"
+              >
+                {canceling ? <Loader2 className="w-4 h-4 animate-spin" /> : <span>Confirmar cancelación</span>}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

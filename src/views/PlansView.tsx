@@ -165,48 +165,84 @@ export const PlansView: React.FC<PlansViewProps> = ({
 
       {/* Current Subscription Status Bar if paid */}
       {subscription && subscription.plan !== 'free' && (
-        <div className="mb-8 max-w-4xl mx-auto bg-slate-900/60 border border-cyan-500/30 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-          <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 rounded-xl bg-cyan-950/80 border border-cyan-500/40 flex items-center justify-center text-cyan-400 font-bold">
-              {subscription.plan === 'premium' ? <Crown className="w-5 h-5 text-amber-400" /> : <Sparkles className="w-5 h-5 text-cyan-400" />}
-            </div>
-            <div>
-              <div className="flex items-center space-x-2">
-                <span className="text-sm font-bold text-white uppercase tracking-wide">
-                  Plan Actual: {subscription.plan.toUpperCase()}
-                </span>
-                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-                  subscription.status === 'active'
-                    ? 'bg-emerald-950/60 text-emerald-300 border-emerald-500/40'
-                    : 'bg-amber-950/60 text-amber-300 border-amber-500/40'
-                }`}>
-                  {subscription.status === 'active' ? '● Activo' : '● Cancelado (Vence pronto)'}
-                </span>
+        <div className={`mb-8 max-w-4xl mx-auto rounded-3xl p-5 sm:p-6 transition-all ${
+          subscription.status === 'canceled'
+            ? 'bg-gradient-to-r from-amber-950/40 via-slate-900/90 to-[#070b16] border border-amber-500/40 shadow-xl shadow-amber-500/5'
+            : 'bg-gradient-to-r from-blue-950/40 via-slate-900/90 to-[#070b16] border border-cyan-500/40 shadow-xl shadow-cyan-500/5'
+        }`}>
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="flex items-start sm:items-center space-x-3.5">
+              <div className={`w-12 h-12 rounded-2xl flex items-center justify-center font-bold shrink-0 ${
+                subscription.plan === 'premium'
+                  ? 'bg-amber-950/80 border border-amber-500/40 text-amber-400'
+                  : 'bg-cyan-950/80 border border-cyan-500/40 text-cyan-400'
+              }`}>
+                {subscription.plan === 'premium' ? <Crown className="w-6 h-6" /> : <Sparkles className="w-6 h-6" />}
               </div>
-              {subscription.currentPeriodEnd && (
-                <p className="text-xs text-slate-400 mt-0.5 flex items-center space-x-1">
-                  <Clock className="w-3.5 h-3.5 text-slate-500" />
-                  <span>
-                    {subscription.status === 'active' ? 'Próxima renovación: ' : 'Acceso garantizado hasta: '}
-                    {new Date(subscription.currentPeriodEnd).toLocaleDateString('es-CL', {
-                      day: 'numeric',
-                      month: 'long',
-                      year: 'numeric'
-                    })}
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-base font-black text-white uppercase tracking-wide">
+                    Plan Actual: {subscription.plan.toUpperCase()}
                   </span>
-                </p>
-              )}
-            </div>
-          </div>
+                  <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${
+                    subscription.status === 'active'
+                      ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500/40'
+                      : 'bg-amber-950/80 text-amber-300 border-amber-500/40'
+                  }`}>
+                    {subscription.status === 'active' ? '● Suscripción Activa' : '● Cancelada (En período de gracia)'}
+                  </span>
+                </div>
 
-          {subscription.status === 'active' && (
-            <button
-              onClick={() => setShowCancelConfirm(true)}
-              className="text-xs text-slate-400 hover:text-rose-400 transition underline underline-offset-4"
-            >
-              Cancelar suscripción
-            </button>
-          )}
+                {subscription.status === 'canceled' ? (
+                  <p className="text-xs text-amber-200 mt-1 font-medium leading-relaxed">
+                    {subscription.currentPeriodEnd ? (
+                      <>
+                        Tu plan <b>{subscription.plan.toUpperCase()}</b> sigue activo hasta el{' '}
+                        <b>
+                          {new Date(subscription.currentPeriodEnd).toLocaleDateString('es-ES', {
+                            day: 'numeric',
+                            month: 'long',
+                            year: 'numeric',
+                          })}
+                        </b>
+                        , después pasarás a Gratis automáticamente.
+                      </>
+                    ) : (
+                      <>Tu plan ha sido cancelado. Tu cuenta pasará al plan Gratis automáticamente.</>
+                    )}
+                  </p>
+                ) : (
+                  subscription.currentPeriodEnd && (
+                    <p className="text-xs text-slate-400 mt-1 flex items-center space-x-1.5">
+                      <Clock className="w-3.5 h-3.5 text-slate-500" />
+                      <span>
+                        Próxima renovación:{' '}
+                        <b className="text-slate-300">
+                          {new Date(subscription.currentPeriodEnd).toLocaleDateString('es-ES', {
+                            day: 'numeric',
+                            month: 'long',
+                            year: 'numeric',
+                          })}
+                        </b>
+                      </span>
+                    </p>
+                  )
+                )}
+              </div>
+            </div>
+
+            {/* Cancel Plan Button - only shown if paid plan is active */}
+            {subscription.status === 'active' && (
+              <button
+                id="cancel-plan-btn"
+                onClick={() => setShowCancelConfirm(true)}
+                className="w-full sm:w-auto px-4 py-2.5 rounded-xl text-xs font-bold text-rose-300 hover:text-white bg-rose-950/40 hover:bg-rose-600 border border-rose-500/30 hover:border-rose-500 transition-all shadow-sm flex items-center justify-center gap-1.5 shrink-0"
+              >
+                <XCircle className="w-4 h-4" />
+                <span>Cancelar plan</span>
+              </button>
+            )}
+          </div>
         </div>
       )}
 
@@ -402,22 +438,45 @@ export const PlansView: React.FC<PlansViewProps> = ({
               <AlertCircle className="w-6 h-6" />
             </div>
 
-            <h3 className="text-lg font-bold font-display text-white">¿Deseas cancelar tu suscripción?</h3>
-            <p className="text-xs text-slate-300 mt-2 leading-relaxed">
-              Si cancelas, mantendrás acceso completo a todas las funciones de tu plan hasta el final de tu período contratado. Después, tu cuenta pasará automáticamente al plan Gratis.
+            <h3 className="text-lg font-bold font-display text-white">
+              ¿Seguro que quieres cancelar tu plan {subscription?.plan.toUpperCase()}?
+            </h3>
+            <p className="text-xs text-slate-300 mt-2.5 leading-relaxed">
+              {subscription?.currentPeriodEnd ? (
+                <>
+                  Mantendrás tu plan{' '}
+                  <b className="text-white">{subscription.plan.toUpperCase()}</b> activo hasta el{' '}
+                  <b className="text-cyan-300">
+                    {new Date(subscription.currentPeriodEnd).toLocaleDateString('es-ES', {
+                      day: 'numeric',
+                      month: 'long',
+                      year: 'numeric',
+                    })}
+                  </b>
+                  . Después pasarás al plan Gratis automáticamente sin cobros adicionales.
+                </>
+              ) : (
+                <>
+                  Tu cuenta pasará al plan Gratis de inmediato. Mantendrás todos tus viajes y datos históricos intactos.
+                </>
+              )}
             </p>
 
             <div className="mt-6 flex items-center space-x-3">
               <button
+                type="button"
                 onClick={() => setShowCancelConfirm(false)}
+                disabled={canceling}
                 className="flex-1 bg-white/5 hover:bg-white/10 text-white font-bold py-2.5 px-4 rounded-xl text-xs transition"
               >
                 Mantener mi plan
               </button>
               <button
+                type="button"
+                id="confirm-cancel-plan-btn"
                 onClick={handleCancelSubscription}
                 disabled={canceling}
-                className="flex-1 bg-rose-600 hover:bg-rose-500 text-white font-bold py-2.5 px-4 rounded-xl text-xs transition flex items-center justify-center space-x-2"
+                className="flex-1 bg-rose-600 hover:bg-rose-500 text-white font-bold py-2.5 px-4 rounded-xl text-xs transition flex items-center justify-center space-x-2 shadow-lg shadow-rose-600/20"
               >
                 {canceling ? <Loader2 className="w-4 h-4 animate-spin" /> : <span>Confirmar cancelación</span>}
               </button>
