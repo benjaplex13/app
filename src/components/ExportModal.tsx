@@ -137,22 +137,23 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fadeIn">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md animate-fadeIn">
       <div 
-        className="w-full max-w-xl bg-slate-900/95 border border-white/10 rounded-3xl p-6 sm:p-8 shadow-2xl relative overflow-hidden flex flex-col space-y-6"
+        className="w-full max-w-xl bg-[#070b16] border border-cyan-500/30 rounded-3xl p-6 sm:p-8 shadow-2xl shadow-cyan-500/10 relative overflow-hidden flex flex-col space-y-6 text-white"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Glow accent */}
-        <div className="absolute -top-24 -right-24 w-60 h-60 bg-blue-600/15 rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute -top-24 -right-24 w-60 h-60 bg-cyan-500/15 rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute -bottom-24 -left-24 w-60 h-60 bg-blue-600/15 rounded-full blur-3xl pointer-events-none" />
 
         {/* Header */}
         <div className="flex items-start justify-between relative z-10">
           <div className="space-y-1">
             <div className="flex items-center space-x-2">
-              <div className="p-2 rounded-xl bg-blue-500/10 text-blue-400 border border-blue-500/20">
+              <div className="p-2 rounded-xl bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
                 <Download className="w-5 h-5" />
               </div>
-              <h2 className="text-xl font-bold text-white tracking-tight">Exportación Profesional</h2>
+              <h2 className="text-xl font-bold font-display text-white tracking-tight">Exportación Profesional</h2>
             </div>
             <p className="text-xs text-slate-400">
               Genera informes ejecutivos, respaldos estructurados y hojas de cálculo listas para presentar.
@@ -170,16 +171,16 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         {trips.length > 0 && (
           <div className="space-y-2 relative z-10">
             <label className="text-xs font-semibold text-slate-300 flex items-center space-x-1.5">
-              <MapPin className="w-3.5 h-3.5 text-blue-400" />
+              <MapPin className="w-3.5 h-3.5 text-cyan-400" />
               <span>Viaje a exportar:</span>
             </label>
             <select
               value={selectedTripId}
               onChange={(e) => setSelectedTripId(e.target.value)}
-              className="w-full bg-slate-950 border border-white/10 rounded-2xl p-3 text-sm text-white font-medium focus:border-blue-500 focus:outline-none"
+              className="w-full bg-slate-900/90 border border-white/10 rounded-2xl p-3 text-sm text-white font-medium focus:border-cyan-500 focus:outline-none"
             >
               {trips.map((t) => (
-                <option key={t.id} value={t.id} className="bg-slate-950 text-white">
+                <option key={t.id} value={t.id} className="bg-slate-900 text-white">
                   {t.name} ({t.destination || 'Sin destino'}) — {t.currency}
                 </option>
               ))}
@@ -190,15 +191,15 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         {/* Export Formats Grid */}
         <div className="grid grid-cols-1 gap-3 relative z-10">
           {/* Format 1: Professional PDF with AI Executive Summary */}
-          <div className="p-4 rounded-2xl bg-gradient-to-r from-blue-950/40 to-slate-900 border border-blue-500/30 hover:border-blue-500/60 transition group flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="p-4 rounded-2xl bg-gradient-to-r from-cyan-950/40 via-slate-900/90 to-[#070b16] border border-cyan-500/30 hover:border-cyan-500/60 transition group flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="flex items-start space-x-3.5">
-              <div className="p-3 rounded-2xl bg-blue-500/20 text-blue-400 border border-blue-500/30 mt-0.5">
+              <div className="p-3 rounded-2xl bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 mt-0.5">
                 <FileText className="w-6 h-6" />
               </div>
               <div className="space-y-1">
                 <div className="flex items-center space-x-2">
-                  <span className="font-bold text-white text-sm">Informe Ejecutivo PDF</span>
-                  <span className="inline-flex items-center space-x-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/40">
+                  <span className="font-bold text-white text-sm font-display">Informe Ejecutivo PDF</span>
+                  <span className="inline-flex items-center space-x-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/40">
                     <Sparkles className="w-3 h-3 text-cyan-300" />
                     <span>Con Resumen IA</span>
                   </span>
@@ -212,7 +213,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             <button
               onClick={handleExportPdf}
               disabled={isExportingPdf || trips.length === 0}
-              className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs transition shadow-lg shadow-blue-600/25 flex items-center justify-center space-x-2 disabled:opacity-50 shrink-0"
+              className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white font-semibold text-xs transition shadow-lg shadow-cyan-500/25 flex items-center justify-center space-x-2 disabled:opacity-50 shrink-0"
             >
               {isExportingPdf ? (
                 <>
@@ -229,14 +230,14 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           </div>
 
           {/* Format 1b: Corporate Business Trip Expense Reimbursement PDF (Premium) */}
-          <div className="p-4 rounded-2xl bg-gradient-to-r from-emerald-950/40 to-slate-900 border border-emerald-500/30 hover:border-emerald-500/60 transition group flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="p-4 rounded-2xl bg-gradient-to-r from-emerald-950/40 via-slate-900/90 to-[#070b16] border border-emerald-500/30 hover:border-emerald-500/60 transition group flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="flex items-start space-x-3.5">
               <div className="p-3 rounded-2xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 mt-0.5">
                 <Briefcase className="w-6 h-6" />
               </div>
               <div className="space-y-1">
                 <div className="flex items-center space-x-2">
-                  <span className="font-bold text-white text-sm">Planilla Oficial de Rendición de Negocios</span>
+                  <span className="font-bold text-white text-sm font-display">Planilla Oficial de Rendición de Negocios</span>
                   <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
                     Modo Empresa
                   </span>
@@ -250,7 +251,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             <button
               onClick={handleExportBusinessPdf}
               disabled={isExportingBusinessPdf || trips.length === 0}
-              className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs transition shadow-lg shadow-emerald-600/25 flex items-center justify-center space-x-2 disabled:opacity-50 shrink-0"
+              className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-white font-semibold text-xs transition shadow-lg shadow-emerald-600/25 flex items-center justify-center space-x-2 disabled:opacity-50 shrink-0"
             >
               {isExportingBusinessPdf ? (
                 <>
@@ -267,14 +268,14 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           </div>
 
           {/* Format 2: Structured Hierarchical JSON */}
-          <div className="p-4 rounded-2xl bg-slate-950/60 border border-white/10 hover:border-white/20 transition flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="p-4 rounded-2xl bg-slate-900/60 border border-white/10 hover:border-white/20 transition flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="flex items-start space-x-3.5">
               <div className="p-3 rounded-2xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 mt-0.5">
                 <Braces className="w-6 h-6" />
               </div>
               <div className="space-y-1">
                 <div className="flex items-center space-x-2">
-                  <span className="font-bold text-white text-sm">Respaldo JSON Estructurado</span>
+                  <span className="font-bold text-white text-sm font-display">Respaldo JSON Estructurado</span>
                   <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-800 text-slate-300">
                     v2.1 Schema
                   </span>
@@ -305,13 +306,13 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           </div>
 
           {/* Format 3: CSV Spreadsheet */}
-          <div className="p-4 rounded-2xl bg-slate-950/60 border border-white/10 hover:border-white/20 transition flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="p-4 rounded-2xl bg-slate-900/60 border border-white/10 hover:border-white/20 transition flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="flex items-start space-x-3.5">
               <div className="p-3 rounded-2xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 mt-0.5">
                 <FileSpreadsheet className="w-6 h-6" />
               </div>
               <div className="space-y-1">
-                <span className="font-bold text-white text-sm">Planilla CSV / Excel</span>
+                <span className="font-bold text-white text-sm font-display">Planilla CSV / Excel</span>
                 <p className="text-xs text-slate-400 leading-relaxed max-w-sm">
                   Archivo delimitado por comas con codificación UTF-8 para abrir directamente en Microsoft Excel, Numbers o Google Sheets.
                 </p>

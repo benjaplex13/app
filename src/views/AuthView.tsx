@@ -40,30 +40,6 @@ export const AuthView: React.FC<AuthViewProps> = ({
   const [homeCurrency, setHomeCurrency] = useState<CurrencyCode>('USD');
   const [isLoading, setIsLoading] = useState(false);
   const [logoClicks, setLogoClicks] = useState(0);
-  const [demoConfig, setDemoConfig] = useState<{
-    demoOtpActive: boolean;
-    demoOtpCode: string | null;
-  }>({
-    demoOtpActive: false,
-    demoOtpCode: null,
-  });
-
-  // Load server-side auth & demo configuration on mount
-  useEffect(() => {
-    let isMounted = true;
-    api.getAuthConfig()
-      .then((cfg) => {
-        if (isMounted) {
-          setDemoConfig(cfg);
-        }
-      })
-      .catch(() => {
-        // Silently fail if offline or not reachable
-      });
-    return () => {
-      isMounted = false;
-    };
-  }, []);
 
   const handleLogoEasterEgg = () => {
     const next = logoClicks + 1;
@@ -444,8 +420,6 @@ export const AuthView: React.FC<AuthViewProps> = ({
                 }}
                 disabled={isLoading}
                 autoFocus={true}
-                isDemoActive={demoConfig.demoOtpActive}
-                demoCode={demoConfig.demoOtpCode}
               />
             </div>
 
@@ -547,8 +521,6 @@ export const AuthView: React.FC<AuthViewProps> = ({
                 }}
                 disabled={isLoading}
                 autoFocus={true}
-                isDemoActive={demoConfig.demoOtpActive}
-                demoCode={demoConfig.demoOtpCode}
               />
             </div>
 

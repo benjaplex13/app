@@ -396,7 +396,11 @@ export const api = {
 
   // Diagnostics & Email logs
   async getEmailLogs() {
-    return apiFetch<{ realEmailConfigured: boolean; logs: any[] }>('/api/email-logs');
+    return apiFetch<{
+      realEmailConfigured: boolean;
+      brevoDiagnostics?: any;
+      logs: any[];
+    }>('/api/email-logs');
   },
 
   async getHealth() {
@@ -405,7 +409,17 @@ export const api = {
       service: string;
       database: string;
       supabaseDiagnostics: any;
-      resendDiagnostics: any;
+      brevoDiagnostics: {
+        varPresent: boolean;
+        detectedSourceVar: string | null;
+        keyLength: number;
+        keyPrefix: string;
+        startsWithXkeysib: boolean;
+        clientInitialized: boolean;
+        initError: string | null;
+        fromEmail: string;
+        allBrevoRelatedKeys: any[];
+      };
       geminiDiagnostics: {
         varPresent: boolean;
         detectedSourceVar: string | null;
@@ -418,9 +432,8 @@ export const api = {
       flowDiagnostics: any;
       realEmailConfigured: boolean;
       geminiConfigured: boolean;
-      resendFrom: string;
+      brevoFrom: string;
       demoOtpActive?: boolean;
-      demoOtpCode?: string | null;
       timestamp: string;
     }>('/api/health');
   },
@@ -428,7 +441,6 @@ export const api = {
   async getAuthConfig() {
     return apiFetch<{
       demoOtpActive: boolean;
-      demoOtpCode: string | null;
     }>('/api/auth/config');
   },
 };

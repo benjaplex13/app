@@ -2,7 +2,7 @@ import express, { Request, Response, NextFunction } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
-import { Resend } from 'resend';
+import * as Brevo from '@getbrevo/brevo';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { GoogleGenAI } from '@google/genai';
 
@@ -208,18 +208,19 @@ export function getSupabase(): SupabaseClient {
 }
 
 // ============================================================================
-// RESEND CLIENT & DIAGNOSTICS (Lazy Initialization, Key Scanner & Safe Inspection)
+// BREVO CLIENT & DIAGNOSTICS (Lazy Initialization, Key Scanner & Safe Inspection)
 // ============================================================================
-export function findResendKeyInEnv(): { key: string; sourceVar: string } | null {
+export function findBrevoKeyInEnv(): { key: string; sourceVar: string } | null {
   // 1. Direct check with exact standard names
   const directCandidates = [
-    'RESEND_API_KEY',
-    'RESEND_KEY',
-    'RESEND_API_TOKEN',
-    'RESEND_TOKEN',
-    'RESEND_SECRET',
-    'VITE_RESEND_API_KEY',
-    'VITE_RESEND_KEY',
+    'BREVO_API_KEY',
+    'BREVO_KEY',
+    'SENDINBLUE_API_KEY',
+    'SENDINBLUE_KEY',
+    'BREVO_API_TOKEN',
+    'BREVO_TOKEN',
+    'VITE_BREVO_API_KEY',
+    'VITE_BREVO_KEY',
   ];
 
   for (const varName of directCandidates) {
@@ -232,7 +233,8 @@ export function findResendKeyInEnv(): { key: string; sourceVar: string } | null 
   // 2. Dynamic scan over all process.env keys for any variation (case-insensitive or with whitespace)
   const allEnvKeys = Object.keys(process.env);
   for (const rawKey of allEnvKeys) {
-    if (rawKey.trim().toUpperCase().includes('RESEND')) {
+    const upper = rawKey.trim().toUpperCase();
+    if (upper.includes('BREVO') || upper.includes('SENDINBLUE') || upper.startsWith('SIB_') || upper.includes('XKEYSIB')) {
       const val = process.env[rawKey];
       if (val && typeof val === 'string' && val.trim().length > 0) {
         return { key: val.trim(), sourceVar: rawKey };
@@ -243,12 +245,15 @@ export function findResendKeyInEnv(): { key: string; sourceVar: string } | null 
   return null;
 }
 
-export function getResendKeyDiagnostics() {
+export function getBrevoKeyDiagnostics() {
   const allEnvKeys = Object.keys(process.env);
-  
-  // Find all keys in process.env containing 'RESEND' (case-insensitive)
-  const resendRelatedKeys = allEnvKeys
-    .filter((k) => k.trim().toUpperCase().includes('RESEND'))
+
+  // Find all keys in process.env containing 'BREVO' or 'SENDINBLUE' (case-insensitive)
+  const brevoRelatedKeys = allEnvKeys
+    .filter((k) => {
+      const upper = k.trim().toUpperCase();
+      return upper.includes('BREVO') || upper.includes('SENDINBLUE') || upper.startsWith('SIB_');
+    })
     .map((k) => {
       const val = process.env[k] || '';
       const trimmedVal = val.trim();
@@ -256,10 +261,10 @@ export function getResendKeyDiagnostics() {
         name: k,
         trimmedName: k.trim(),
         valueLength: trimmedVal.length,
-        startsWithRe: trimmedVal.startsWith('re_'),
+        startsWithXkeysib: trimmedVal.startsWith('xkeysib-'),
         hasWhitespaceInKeyName: k !== k.trim(),
         hasWhitespaceInValue: val !== trimmedVal,
-        keyPrefix: trimmedVal.length > 0 ? `${trimmedVal.substring(0, 5)}...` : 'none',
+        keyPrefix: trimmedVal.length > 0 ? `${trimmedVal.substring(0, 10)}...` : 'none',
       };
     });
 
@@ -268,23 +273,21 @@ export function getResendKeyDiagnostics() {
     .filter((k) => !k.startsWith('npm_') && !k.startsWith('_'))
     .sort();
 
-  const foundKeyInfo = findResendKeyInEnv();
+  const foundKeyInfo = findBrevoKeyInEnv();
   const activeKey = foundKeyInfo?.key || '';
   const varPresent = activeKey.length > 0;
+
+  const configuredFrom = (process.env.BREVO_FROM_EMAIL || '').trim();
+  const fromEmail = configuredFrom.length > 0 ? configuredFrom : 'benchomateosa@gmail.com';
 
   let clientInitialized = false;
   let initError: string | null = null;
 
   if (varPresent) {
-    try {
-      const client = new Resend(activeKey);
-      if (client && client.emails) {
-        clientInitialized = true;
-      } else {
-        initError = 'El cliente de Resend se instanció pero falta el módulo de emails.';
-      }
-    } catch (err: any) {
-      initError = err.message || 'Error al instanciar el cliente de Resend con la clave provista.';
+    if (activeKey.length > 10) {
+      clientInitialized = true;
+    } else {
+      initError = 'La clave de Brevo configurada es demasiado corta (debe comenzar con xkeysib-).';
     }
   }
 
@@ -292,27 +295,72 @@ export function getResendKeyDiagnostics() {
     varPresent,
     detectedSourceVar: foundKeyInfo ? foundKeyInfo.sourceVar : null,
     keyLength: activeKey.length,
-    keyPrefix: activeKey.length > 0 ? `${activeKey.substring(0, 5)}...` : 'none',
-    startsWithRe: activeKey.startsWith('re_'),
+    keyPrefix: activeKey.length > 0 ? `${activeKey.substring(0, 10)}...` : 'none',
+    startsWithXkeysib: activeKey.startsWith('xkeysib-'),
     clientInitialized,
     initError,
-    fromEmail: process.env.RESEND_FROM_EMAIL || 'Rumbio <onboarding@resend.dev>',
-    allResendRelatedKeys: resendRelatedKeys,
+    fromEmail,
+    allBrevoRelatedKeys: brevoRelatedKeys,
     totalEnvKeysCount: allEnvKeys.length,
     allAvailableEnvKeyNames,
   };
 }
 
-function getResendClient(): Resend | null {
-  const found = findResendKeyInEnv();
-  if (!found || !found.key) {
-    return null;
-  }
+/**
+ * Robust email dispatcher using Brevo REST API v3
+ */
+async function sendBrevoEmail({
+  apiKey,
+  fromEmail,
+  toEmail,
+  toName,
+  subject,
+  htmlContent,
+  textContent,
+}: {
+  apiKey: string;
+  fromEmail: string;
+  toEmail: string;
+  toName: string;
+  subject: string;
+  htmlContent: string;
+  textContent?: string;
+}): Promise<{ success: boolean; messageId?: string; error?: string }> {
   try {
-    return new Resend(found.key);
-  } catch (err) {
-    console.error('[Resend Init Error]', err);
-    return null;
+    const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST',
+      headers: {
+        'accept': 'application/json',
+        'api-key': apiKey,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        sender: {
+          name: 'Rumbio',
+          email: fromEmail,
+        },
+        to: [
+          {
+            email: toEmail,
+            name: toName || 'Viajero',
+          },
+        ],
+        subject: subject,
+        htmlContent: htmlContent,
+        textContent: textContent || undefined,
+      }),
+    });
+
+    const data: any = await res.json().catch(() => ({}));
+
+    if (!res.ok) {
+      const errorMsg = data?.message || data?.error || `Error HTTP ${res.status}: ${res.statusText}`;
+      return { success: false, error: `Brevo API Error (${res.status}): ${errorMsg}` };
+    }
+
+    return { success: true, messageId: data?.messageId || data?.messageIds?.[0] };
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Error de conexión con la API de Brevo.' };
   }
 }
 
@@ -491,7 +539,7 @@ function mapExpenseFromDb(row: any): ExpenseDoc {
 }
 
 // ============================================================================
-// REAL EMAIL SENDER WITH RESEND & AUDIT LOG IN SUPABASE
+// REAL EMAIL SENDER WITH BREVO & AUDIT LOG IN SUPABASE
 // ============================================================================
 async function sendEmailNotification(
   to: string,
@@ -500,13 +548,13 @@ async function sendEmailNotification(
   code: string,
   userName: string
 ): Promise<{ success: boolean; error?: string }> {
-  const resend = getResendClient();
-  const fromEmail = process.env.RESEND_FROM_EMAIL || 'Rumbio <onboarding@resend.dev>';
+  const foundKeyInfo = findBrevoKeyInEnv();
+  const brevoDiag = getBrevoKeyDiagnostics();
 
-  if (!resend) {
+  if (!foundKeyInfo || !foundKeyInfo.key) {
     const errorMsg =
-      'El servicio de correo no está disponible: la variable RESEND_API_KEY no está configurada en las variables de entorno de Vercel/Servidor.';
-    console.error(`[Resend Error] ${errorMsg}`);
+      'El servicio de correo no está disponible: la variable BREVO_API_KEY no está configurada en las variables de entorno de Vercel/Servidor. Configúrala junto con BREVO_FROM_EMAIL para enviar códigos reales.';
+    console.error(`[Brevo Error] ${errorMsg}`);
 
     try {
       const supabase = getSupabase();
@@ -526,6 +574,8 @@ async function sendEmailNotification(
 
     return { success: false, error: errorMsg };
   }
+
+  const fromEmail = brevoDiag.fromEmail;
 
   const htmlContent = `
     <!DOCTYPE html>
@@ -574,54 +624,23 @@ async function sendEmailNotification(
     </html>
   `;
 
-  try {
-    const response = await resend.emails.send({
-      from: fromEmail,
-      to: [to],
-      subject: subject,
-      html: htmlContent,
-    });
+  const textContent = `Hola ${userName},\n\nTu código de ${
+    type === 'verification' ? 'verificación de cuenta' : 'recuperación de contraseña'
+  } para Rumbio es: ${code}\n\nEste código expira en 15 minutos.\n\nSi no solicitaste esta acción, ignora este mensaje.`;
 
-    if (response.error) {
-      const errorMsg = `Error de Resend (${response.error.name}): ${response.error.message}`;
-      console.warn('[Resend API Error]', response.error);
+  const sendResult = await sendBrevoEmail({
+    apiKey: foundKeyInfo.key,
+    fromEmail,
+    toEmail: to,
+    toName: userName,
+    subject,
+    htmlContent,
+    textContent,
+  });
 
-      try {
-        const supabase = getSupabase();
-        await supabase.from('email_logs').insert({
-          id: 'email_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
-          to_email: to,
-          subject,
-          type,
-          code,
-          status: 'failed',
-          error: errorMsg,
-          created_at: new Date().toISOString(),
-        });
-      } catch {}
-
-      return { success: false, error: errorMsg };
-    }
-
-    console.log(`[Resend] Real email dispatched successfully to ${to} (ID: ${response.data?.id})`);
-
-    try {
-      const supabase = getSupabase();
-      await supabase.from('email_logs').insert({
-        id: 'email_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
-        to_email: to,
-        subject,
-        type,
-        code,
-        status: 'sent_resend',
-        created_at: new Date().toISOString(),
-      });
-    } catch {}
-
-    return { success: true };
-  } catch (err: any) {
-    const errorMsg = err.message || 'Error de comunicación con el servicio de correo Resend.';
-    console.error('[Resend Exception]', err);
+  if (!sendResult.success) {
+    const errorMsg = sendResult.error || 'Error de comunicación con el servicio de correo Brevo.';
+    console.error('[Brevo Error]', errorMsg);
 
     try {
       const supabase = getSupabase();
@@ -639,6 +658,23 @@ async function sendEmailNotification(
 
     return { success: false, error: errorMsg };
   }
+
+  console.log(`[Brevo] Real email dispatched successfully to ${to} (MessageId: ${sendResult.messageId || 'ok'})`);
+
+  try {
+    const supabase = getSupabase();
+    await supabase.from('email_logs').insert({
+      id: 'email_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+      to_email: to,
+      subject,
+      type,
+      code,
+      status: 'sent_brevo',
+      created_at: new Date().toISOString(),
+    });
+  } catch {}
+
+  return { success: true };
 }
 
 // ============================================================================
@@ -1216,13 +1252,12 @@ app.get('/api/auth/config', (req: Request, res: Response) => {
   const demoConfig = getDemoOtpConfig();
   res.json({
     demoOtpActive: demoConfig.demoOtpActive,
-    demoOtpCode: demoConfig.demoOtpCode,
   });
 });
 
-// 1. Health & Config Status (Checks Supabase + Resend + Gemini + Flow + Demo Mode)
+// 1. Health & Config Status (Checks Supabase + Brevo + Gemini + Flow + Demo Mode)
 app.get('/api/health', async (req: Request, res: Response) => {
-  const resendDiagnostics = getResendKeyDiagnostics();
+  const brevoDiagnostics = getBrevoKeyDiagnostics();
   const geminiDiagnostics = getGeminiKeyDiagnostics();
   let supabaseStatus = 'disconnected';
   const supabaseDiagnostics = getSupabaseKeyDiagnostics();
@@ -1247,7 +1282,7 @@ app.get('/api/health', async (req: Request, res: Response) => {
     service: 'Rumbio Production Backend Engine',
     database: supabaseStatus,
     supabaseDiagnostics,
-    resendDiagnostics,
+    brevoDiagnostics,
     geminiDiagnostics,
     flowDiagnostics: {
       configured: flowConfig.isConfigured,
@@ -1257,10 +1292,9 @@ app.get('/api/health', async (req: Request, res: Response) => {
       secretKeyPresent: !!flowConfig.secretKey,
     },
     demoOtpActive: demoConfig.demoOtpActive,
-    demoOtpCode: demoConfig.demoOtpCode,
-    realEmailConfigured: resendDiagnostics.clientInitialized,
+    realEmailConfigured: brevoDiagnostics.clientInitialized,
     geminiConfigured: geminiDiagnostics.clientInitialized,
-    resendFrom: resendDiagnostics.fromEmail,
+    brevoFrom: brevoDiagnostics.fromEmail,
     timestamp: new Date().toISOString(),
   });
 });
@@ -1275,10 +1309,10 @@ app.get('/api/email-logs', async (req: Request, res: Response) => {
       .order('created_at', { ascending: false })
       .limit(30);
 
-    const resendDiagnostics = getResendKeyDiagnostics();
+    const brevoDiagnostics = getBrevoKeyDiagnostics();
     res.json({
-      realEmailConfigured: resendDiagnostics.clientInitialized,
-      resendDiagnostics,
+      realEmailConfigured: brevoDiagnostics.clientInitialized,
+      brevoDiagnostics,
       logs: logs || [],
     });
   } catch (err: any) {
@@ -1382,7 +1416,7 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
       }
     }
 
-    // Dispatch real email via Resend
+    // Dispatch real email via Brevo
     const emailResult = await sendEmailNotification(
       normalizedEmail,
       '✈️ Tu código de verificación para activar Rumbio',
@@ -1395,7 +1429,7 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
       return res.status(503).json({
         error:
           emailResult.error ||
-          'No fue posible enviar el correo de verificación. Verifica que RESEND_API_KEY esté configurada.',
+          'No fue posible enviar el correo de verificación. Verifica que BREVO_API_KEY esté configurada.',
       });
     }
 
@@ -3307,9 +3341,10 @@ app.post('/api/budget/alert-notification', verifyAuth, async (req: Authenticated
     let emailError: string | null = null;
 
     if (sendEmail) {
-      const resend = getResendClient();
-      if (resend) {
-        const fromEmail = process.env.RESEND_FROM_EMAIL || 'Rumbio <onboarding@resend.dev>';
+      const foundKeyInfo = findBrevoKeyInEnv();
+      const brevoDiag = getBrevoKeyDiagnostics();
+      if (foundKeyInfo && foundKeyInfo.key) {
+        const fromEmail = brevoDiag.fromEmail;
         const subject = threshold >= 100 
           ? `⚠️ Alerta de Sobregiro Rumbio: Has alcanzado el 100% en ${tripName}`
           : `⚡ Alerta de Presupuesto Rumbio: Has consumido el 80% en ${tripName}`;
@@ -3340,20 +3375,19 @@ app.post('/api/budget/alert-notification', verifyAuth, async (req: Authenticated
           </html>
         `;
 
-        try {
-          const emailRes = await resend.emails.send({
-            from: fromEmail,
-            to: [userEmail],
-            subject,
-            html: alertHtml,
-          });
-          if (emailRes.error) {
-            emailError = emailRes.error.message;
-          } else {
-            emailSent = true;
-          }
-        } catch (err: any) {
-          emailError = err.message;
+        const sendResult = await sendBrevoEmail({
+          apiKey: foundKeyInfo.key,
+          fromEmail,
+          toEmail: userEmail,
+          toName: userName,
+          subject,
+          htmlContent: alertHtml,
+        });
+
+        if (sendResult.success) {
+          emailSent = true;
+        } else {
+          emailError = sendResult.error || 'Error al enviar alerta de correo';
         }
       }
     }

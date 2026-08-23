@@ -1,5 +1,4 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { Sparkles, Copy, Check } from 'lucide-react';
 
 interface OtpInputProps {
   length?: number;
@@ -19,11 +18,8 @@ export const OtpInput: React.FC<OtpInputProps> = ({
   onComplete,
   disabled = false,
   autoFocus = true,
-  demoCode = null,
-  isDemoActive = false,
 }) => {
   const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
-  const [copiedDemo, setCopiedDemo] = useState(false);
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   // Split value into characters array of fixed length
@@ -119,12 +115,6 @@ export const OtpInput: React.FC<OtpInputProps> = ({
     }
   };
 
-  const handleFillDemo = (code: string) => {
-    handlePasteString(code, 0);
-    setCopiedDemo(true);
-    setTimeout(() => setCopiedDemo(false), 2000);
-  };
-
   return (
     <div className="w-full flex flex-col items-center select-none" id="otp-input-container">
       {/* 6 OTP Cells */}
@@ -216,30 +206,6 @@ export const OtpInput: React.FC<OtpInputProps> = ({
           );
         })}
       </div>
-
-      {/* Demo Code Indicator (Only visible if isDemoActive === true and demoCode is provided) */}
-      {isDemoActive && demoCode && (
-        <div
-          className="mt-3 flex items-center justify-center gap-1.5 text-xs text-slate-400 font-mono transition-opacity duration-300"
-          id="otp-demo-hint"
-        >
-          <span className="text-[11px] text-slate-400">Demo code:</span>
-          <button
-            type="button"
-            onClick={() => handleFillDemo(demoCode)}
-            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-cyan-950/60 border border-cyan-500/30 text-cyan-300 text-xs font-bold font-mono hover:bg-cyan-900/60 hover:border-cyan-400 transition-all active:scale-95 group shadow-sm cursor-pointer"
-            title="Haz clic para autocompletar el código demo"
-          >
-            <Sparkles className="w-3 h-3 text-cyan-400 group-hover:rotate-12 transition-transform" />
-            <span>{demoCode}</span>
-            {copiedDemo ? (
-              <Check className="w-3 h-3 text-emerald-400 ml-0.5" />
-            ) : (
-              <Copy className="w-2.5 h-2.5 text-slate-400 group-hover:text-cyan-200 ml-0.5 opacity-60" />
-            )}
-          </button>
-        </div>
-      )}
     </div>
   );
 };

@@ -45,8 +45,8 @@
 
 /* ================= OTP Animated Trace Effect ================= */
 .otp-node .trace-track {
-  stroke: rgba(51, 65, 85, 0.4);
-  stroke-width: 1.5px;
+  stroke: rgba(51, 65, 85, 0.45);
+  stroke-width: 2px;
   fill: none;
   transition: stroke 0.3s ease;
 }
@@ -58,31 +58,30 @@
   fill: none;
   stroke-linecap: round;
   stroke-linejoin: round;
-  opacity: 0;
-  transition: opacity 0.2s ease, stroke 0.2s ease;
-}
-
-.otp-node.is-focused .trace {
-  stroke: #22d3ee; /* Electric Cyan */
-  opacity: 1;
-  animation: draw-otp-trace 0.65s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-  filter: drop-shadow(0 0 6px rgba(34, 211, 238, 0.65));
 }
 
 .otp-node.has-value .trace {
-  stroke: #38bdf8; /* Sky Cyan/Blue */
-  opacity: 1;
-  animation: draw-otp-trace 0.75s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-  filter: drop-shadow(0 0 4px rgba(56, 189, 248, 0.45));
+  stroke: #7af5e8;
+  stroke-dasharray: 100;
+  animation: draw 1.35s ease forwards;
+  filter: drop-shadow(0 0 6px rgba(122, 245, 232, 0.65));
+}
+
+.otp-node.is-focused:not(.has-value) .trace {
+  stroke: #38bdf8;
+  stroke-dasharray: 100;
+  animation: draw 1.35s ease forwards;
+  filter: drop-shadow(0 0 6px rgba(56, 189, 248, 0.5));
 }
 
 .otp-node.is-focused.has-value .trace {
-  stroke: #7af5e8; /* Vibrant Aquamarine Cyan */
-  animation: draw-otp-trace 0.65s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-  filter: drop-shadow(0 0 8px rgba(122, 245, 232, 0.75));
+  stroke: #7af5e8;
+  stroke-dasharray: 100;
+  animation: draw 1.35s ease forwards;
+  filter: drop-shadow(0 0 8px rgba(122, 245, 232, 0.85));
 }
 
-@keyframes draw-otp-trace {
+@keyframes draw {
   from {
     stroke-dashoffset: 100;
   }
