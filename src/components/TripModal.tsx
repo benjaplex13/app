@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Plane, X, Calendar, DollarSign, Users, Sparkles, ArrowRightLeft, Trash2 } from 'lucide-react';
+import { Plane, X, Calendar, DollarSign, Users, Sparkles, ArrowRightLeft, Trash2, Home, MapPin } from 'lucide-react';
 import { Trip, CurrencyCode, User } from '../types';
 import { CURRENCIES, CURRENCIES_BY_REGION } from '../data/currencies';
 
@@ -23,18 +23,28 @@ export const TripModal: React.FC<TripModalProps> = ({
   const [startDate, setStartDate] = useState(trip?.startDate || new Date().toISOString().split('T')[0]);
   const [endDate, setEndDate] = useState(trip?.endDate || new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0]);
   const [budget, setBudget] = useState(trip ? trip.budget.toString() : '2000');
+  const [homeCurrency, setHomeCurrency] = useState<CurrencyCode>((currentUser.homeCurrency as CurrencyCode) || 'USD');
   const [currency, setCurrency] = useState<CurrencyCode>(trip?.currency || 'EUR');
   const [exchangeRate, setExchangeRate] = useState(trip ? trip.exchangeRate.toString() : '1.08');
   const [membersInput, setMembersInput] = useState(trip ? trip.members.join(', ') : 'Yo, Carlos, Valeria');
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
 
-  // Auto-calculate suggested exchange rate when destination currency changes
-  const handleCurrencyChange = (newCurr: CurrencyCode) => {
-    setCurrency(newCurr);
-    const destRateToUSD = CURRENCIES[newCurr]?.approxRateToUSD || 1;
-    const homeRateToUSD = CURRENCIES[currentUser.homeCurrency]?.approxRateToUSD || 1;
+  // Recalculate exchange rate when either currency changes
+  const recalcRate = (destCurr: CurrencyCode, homeCurr: CurrencyCode) => {
+    const destRateToUSD = CURRENCIES[destCurr]?.approxRateToUSD || 1;
+    const homeRateToUSD = CURRENCIES[homeCurr]?.approxRateToUSD || 1;
     const computedRate = Math.round((destRateToUSD / homeRateToUSD) * 10000) / 10000;
     setExchangeRate(computedRate.toString());
+  };
+
+  const handleDestCurrencyChange = (newCurr: CurrencyCode) => {
+    setCurrency(newCurr);
+    recalcRate(newCurr, homeCurrency);
+  };
+
+  const handleHomeCurrencyChange = (newCurr: CurrencyCode) => {
+    setHomeCurrency(newCurr);
+    recalcRate(currency, newCurr);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -148,30 +158,52 @@ export const TripModal: React.FC<TripModalProps> = ({
             </div>
           </div>
 
-          {/* Budget & Destination Currency */}
+          {/* Budget */}
+          <div>
+            <label className="block text-slate-400 font-semibold mb-1.5 text-[11px] flex items-center gap-1.5">
+              <DollarSign className="w-3.5 h-3.5 text-cyan-400" /> Presupuesto Total
+            </label>
+            <input
+              type="number"
+              step="any"
+              required
+              value={budget}
+              onChange={(e) => setBudget(e.target.value)}
+              placeholder="2500"
+              className="w-full bg-slate-900/80 border border-white/10 rounded-2xl p-3 text-white font-mono focus:border-blue-500 focus:outline-none"
+            />
+          </div>
+
+          {/* Home & Destination Currencies */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-slate-400 font-semibold mb-1.5 text-[11px] flex items-center gap-1.5">
-                <DollarSign className="w-3.5 h-3.5 text-cyan-400" /> Presupuesto Total ({currentUser.homeCurrency})
+                <Home className="w-3.5 h-3.5 text-emerald-400" /> Moneda de Tu País
               </label>
-              <input
-                type="number"
-                step="any"
-                required
-                value={budget}
-                onChange={(e) => setBudget(e.target.value)}
-                placeholder="2500"
-                className="w-full bg-slate-900/80 border border-white/10 rounded-2xl p-3 text-white font-mono focus:border-blue-500 focus:outline-none"
-              />
+              <select
+                value={homeCurrency}
+                onChange={(e) => handleHomeCurrencyChange(e.target.value as CurrencyCode)}
+                className="w-full bg-slate-900/80 border border-emerald-500/20 rounded-2xl p-3 text-white focus:border-emerald-500 focus:outline-none"
+              >
+                {CURRENCIES_BY_REGION.map((group) => (
+                  <optgroup key={group.region} label={group.region} className="bg-slate-900 text-slate-300 font-semibold">
+                    {group.currencies.map((c) => (
+                      <option key={c.code} value={c.code} className="bg-slate-950 text-white">
+                        {c.flag} {c.code} - {c.name} ({c.symbol})
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
             </div>
             <div>
-              <label className="block text-slate-400 font-semibold mb-1.5 text-[11px]">
-                Moneda del Destino
+              <label className="block text-slate-400 font-semibold mb-1.5 text-[11px] flex items-center gap-1.5">
+                <MapPin className="w-3.5 h-3.5 text-blue-400" /> Moneda del Destino
               </label>
               <select
                 value={currency}
-                onChange={(e) => handleCurrencyChange(e.target.value as CurrencyCode)}
-                className="w-full bg-slate-900/80 border border-white/10 rounded-2xl p-3 text-white focus:border-blue-500 focus:outline-none"
+                onChange={(e) => handleDestCurrencyChange(e.target.value as CurrencyCode)}
+                className="w-full bg-slate-900/80 border border-blue-500/20 rounded-2xl p-3 text-white focus:border-blue-500 focus:outline-none"
               >
                 {CURRENCIES_BY_REGION.map((group) => (
                   <optgroup key={group.region} label={group.region} className="bg-slate-900 text-slate-300 font-semibold">
@@ -191,7 +223,7 @@ export const TripModal: React.FC<TripModalProps> = ({
             <div className="flex justify-between items-center mb-1.5">
               <label className="text-slate-300 font-semibold text-[11px] flex items-center gap-1">
                 <ArrowRightLeft className="w-3.5 h-3.5 text-blue-400" />
-                Tasa de Conversión (1 {currency} = ? {currentUser.homeCurrency})
+                Tasa de Conversión (1 {currency} = ? {homeCurrency})
               </label>
               <span className="text-[10px] text-cyan-400">Actualizable en vivo</span>
             </div>
@@ -204,7 +236,7 @@ export const TripModal: React.FC<TripModalProps> = ({
               className="w-full bg-slate-900 border border-white/10 rounded-xl p-2.5 text-white font-mono focus:border-blue-500 focus:outline-none"
             />
             <p className="text-[10px] text-slate-500 mt-1.5">
-              Todos los gastos en {currency} se convertirán automáticamente a {currentUser.homeCurrency}.
+              Todos los gastos en {currency} se convertirán automáticamente a {homeCurrency}.
             </p>
           </div>
 
