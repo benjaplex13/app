@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import app from './api/index';
 import path from 'path';
 import express, { Request, Response } from 'express';
