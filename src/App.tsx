@@ -42,7 +42,10 @@ import { LogoConcept } from './components/RumbioLogo';
 import { downloadStructuredJSON } from './utils/exportEngine';
 import { OfflineSyncBanner } from './components/OfflineSyncBanner';
 import { PwaCompactWidget } from './components/PwaCompactWidget';
-import { Compass, Plus, Loader2 } from 'lucide-react';
+import { LegalModal, LegalTab } from './components/LegalModal';
+import { CookieBanner } from './components/CookieBanner';
+import { NotFoundView } from './views/NotFoundView';
+import { Compass, Plus, Loader2, ShieldCheck } from 'lucide-react';
 
 export function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -82,6 +85,9 @@ export function App() {
   const [isBankSyncModalOpen, setIsBankSyncModalOpen] = useState(false);
   const [isBusinessTripModalOpen, setIsBusinessTripModalOpen] = useState(false);
   const [isAnalyticsModalOpen, setIsAnalyticsModalOpen] = useState(false);
+
+  // Legal & Trust Modal (Block 1)
+  const [legalModalTab, setLegalModalTab] = useState<LegalTab | null>(null);
 
   // Notifications
   const [toasts, setToasts] = useState<ToastNotification[]>([]);
@@ -443,6 +449,7 @@ export function App() {
         <AuthView
           onLoginSuccess={handleLoginSuccess}
           onShowToast={showToast}
+          onOpenLegal={(tab) => setLegalModalTab(tab)}
         />
       ) : (
         /* Logged In -> Main Application View */
@@ -502,6 +509,8 @@ export function App() {
                   return await fetchSubscription();
                 }}
                 onTriggerToast={showToast}
+                onOpenLegal={(tab) => setLegalModalTab(tab)}
+                onNavigateToProfile={() => setCurrentTab('profile')}
               />
             ) : currentTab === 'profile' ? (
               <ProfileView
@@ -517,6 +526,7 @@ export function App() {
                 onUpdateBaseCurrency={handleUpdateBaseCurrency}
                 onExportAllJSON={handleExportAllJSON}
                 onOpenExportModal={() => setIsExportModalOpen(true)}
+                onOpenLegal={(tab) => setLegalModalTab(tab)}
                 onShowToast={showToast}
               />
             ) : currentTab === 'chat' ? (
@@ -648,9 +658,54 @@ export function App() {
                     onShowToast={showToast}
                   />
                 )}
+
+                {/* 404 Fallback if tab is unrecognized */}
+                {!['overview', 'expenses', 'budget', 'split', 'planner', 'checklist', 'chat', 'plans', 'profile'].includes(currentTab) && (
+                  <NotFoundView onGoHome={() => setCurrentTab('overview')} />
+                )}
               </>
             )}
           </main>
+
+          {/* App Footer with Legal & Contact Access */}
+          <footer className="w-full border-t border-white/5 bg-[#050811]/90 py-6 px-4 sm:px-6 lg:px-8 mt-auto">
+            <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-400">
+              <div className="flex items-center space-x-3">
+                <span className="font-bold text-white font-display">
+                  Rumbio<span className="text-cyan-400">.</span>
+                </span>
+                <span className="text-slate-600">|</span>
+                <span>Finanzas y Presupuesto de Viaje</span>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-1">
+                <button
+                  onClick={() => setLegalModalTab('privacy')}
+                  className="hover:text-cyan-300 transition underline underline-offset-4 cursor-pointer"
+                >
+                  Privacidad
+                </button>
+                <button
+                  onClick={() => setLegalModalTab('terms')}
+                  className="hover:text-cyan-300 transition underline underline-offset-4 cursor-pointer"
+                >
+                  Términos
+                </button>
+                <button
+                  onClick={() => setLegalModalTab('contact')}
+                  className="hover:text-cyan-300 transition underline underline-offset-4 cursor-pointer"
+                >
+                  Contacto ({'benchomateosa@gmail.com'})
+                </button>
+                <button
+                  onClick={() => setLegalModalTab('cookies')}
+                  className="hover:text-cyan-300 transition underline underline-offset-4 cursor-pointer"
+                >
+                  Cookies
+                </button>
+              </div>
+            </div>
+          </footer>
         </div>
       )}
 
@@ -825,6 +880,17 @@ export function App() {
           onShowToast={showToast}
         />
       )}
+
+      {/* Legal & Trust Modal (Privacy, Terms, Contact, Cookies) */}
+      <LegalModal
+        isOpen={!!legalModalTab}
+        initialTab={legalModalTab || 'privacy'}
+        onClose={() => setLegalModalTab(null)}
+        onShowToast={showToast}
+      />
+
+      {/* Non-intrusive Cookie & Storage Banner */}
+      <CookieBanner onOpenLegal={(tab) => setLegalModalTab(tab)} />
     </div>
   );
 }

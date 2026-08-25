@@ -29,6 +29,7 @@ interface CheckoutModalProps {
   billingCycle: BillingCycle;
   onSuccess: (subscription: UserSubscription) => void;
   onShowToast: (message: string, type?: 'success' | 'error' | 'warning' | 'info') => void;
+  onCancelPlanClick?: () => void;
 }
 
 export const CheckoutModal: React.FC<CheckoutModalProps> = ({
@@ -39,6 +40,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   billingCycle,
   onSuccess,
   onShowToast,
+  onCancelPlanClick,
 }) => {
   const [cardHolder, setCardHolder] = useState(currentUser.name || '');
   const [cardEmail, setCardEmail] = useState(currentUser.email || '');
@@ -322,8 +324,28 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                   </div>
                 </div>
 
+                {/* Compliance Subscription Notice */}
+                <div id="checkout-subscription-compliance-notice" className="text-[11px] text-slate-300 bg-slate-900/90 border border-cyan-500/20 rounded-xl p-3 leading-relaxed text-center">
+                  Al confirmar, aceptas que <strong className="text-white font-semibold">Rumbio {selectedPlanData.name}</strong> es una suscripción de renovación automática <strong className="text-cyan-300 font-semibold">{billingCycle === 'annual' ? 'anual' : 'mensual'}</strong>. Puedes{' '}
+                  <button
+                    type="button"
+                    id="checkout-cancel-plan-link"
+                    onClick={() => {
+                      if (onCancelPlanClick) {
+                        onCancelPlanClick();
+                      } else {
+                        onClose();
+                      }
+                    }}
+                    className="text-cyan-400 font-bold underline underline-offset-2 hover:text-cyan-300 transition cursor-pointer"
+                  >
+                    cancelarla
+                  </button>{' '}
+                  en cualquier momento desde tu perfil, sin cargos adicionales.
+                </div>
+
                 {/* Action buttons */}
-                <div className="pt-3 space-y-2">
+                <div className="pt-1 space-y-2">
                   <button
                     type="button"
                     id="checkout-confirm-btn"

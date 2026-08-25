@@ -19,12 +19,15 @@ import { UserSubscription, PlanTier, BillingCycle, User } from '../types';
 import { PLANS, PLAN_LIMITS } from '../data/plans';
 import { api } from '../utils/api';
 import { CheckoutModal, DEMO_AUTO_ACTIVATE_MODE } from '../components/CheckoutModal';
+import { LegalTab } from '../components/LegalModal';
 
 interface PlansViewProps {
   currentUser: User;
   subscription: UserSubscription | null;
   onRefreshSubscription: (updatedSub?: UserSubscription) => Promise<any>;
   onTriggerToast: (message: string, type?: 'success' | 'error' | 'warning' | 'info') => void;
+  onOpenLegal?: (tab: LegalTab) => void;
+  onNavigateToProfile?: () => void;
 }
 
 export const PlansView: React.FC<PlansViewProps> = ({
@@ -32,6 +35,8 @@ export const PlansView: React.FC<PlansViewProps> = ({
   subscription,
   onRefreshSubscription,
   onTriggerToast,
+  onOpenLegal,
+  onNavigateToProfile,
 }) => {
   const [billingCycle, setBillingCycle] = useState<BillingCycle>('monthly');
   const [loadingPlan, setLoadingPlan] = useState<PlanTier | null>(null);
@@ -43,6 +48,18 @@ export const PlansView: React.FC<PlansViewProps> = ({
   const currentPlan = subscription?.plan || 'free';
   const isPaidActive = currentPlan !== 'free' && subscription?.status === 'active';
   const isCanceled = subscription?.status === 'canceled';
+
+  const handleCancelPlanLinkClick = () => {
+    setCheckoutPlan(null);
+    if (isPaidActive) {
+      setShowCancelConfirm(true);
+    } else if (onNavigateToProfile) {
+      onNavigateToProfile();
+      onTriggerToast('Desde tu perfil podrás gestionar o cancelar tu suscripción en cualquier momento con un solo clic.', 'info');
+    } else {
+      setShowCancelConfirm(true);
+    }
+  };
 
   const handleSelectPlan = async (planTier: PlanTier) => {
     if (planTier === 'free') {
@@ -368,6 +385,21 @@ export const PlansView: React.FC<PlansViewProps> = ({
                     )}
                   </button>
                 )}
+
+                {/* Recurring subscription compliance note */}
+                {plan.id !== 'free' && !isCurrent && (
+                  <p className="text-[10.5px] text-slate-400 text-center mt-2.5 leading-relaxed px-1">
+                    Renovación automática {billingCycle === 'annual' ? 'anual' : 'mensual'}. Puedes{' '}
+                    <button
+                      type="button"
+                      onClick={handleCancelPlanLinkClick}
+                      className="text-cyan-400 underline underline-offset-2 hover:text-cyan-300 font-semibold transition cursor-pointer"
+                    >
+                      cancelarla
+                    </button>{' '}
+                    en cualquier momento desde tu perfil, sin cargos adicionales.
+                  </p>
+                )}
               </div>
             </div>
           );
@@ -423,10 +455,38 @@ export const PlansView: React.FC<PlansViewProps> = ({
           </div>
         </div>
 
-        {/* Security badge */}
-        <div className="mt-8 flex items-center justify-center space-x-2 text-xs text-slate-400">
-          <ShieldCheck className="w-4 h-4 text-cyan-400" />
-          <span>Pagos protegidos por encriptación TLS 256-bit y firma criptográfica HMAC SHA-256.</span>
+        {/* Security badge & Legal links */}
+        <div className="mt-8 pt-6 border-t border-white/5 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-400">
+          <div className="flex items-center space-x-2">
+            <ShieldCheck className="w-4 h-4 text-cyan-400" />
+            <span>Pagos protegidos por encriptación TLS y pasarela segura Flow.cl</span>
+          </div>
+
+          <div className="flex items-center space-x-4 text-xs">
+            <button
+              type="button"
+              onClick={() => onOpenLegal && onOpenLegal('terms')}
+              className="hover:text-cyan-300 underline underline-offset-2 transition cursor-pointer"
+            >
+              Términos de Suscripción
+            </button>
+            <span>•</span>
+            <button
+              type="button"
+              onClick={() => onOpenLegal && onOpenLegal('privacy')}
+              className="hover:text-cyan-300 underline underline-offset-2 transition cursor-pointer"
+            >
+              Privacidad
+            </button>
+            <span>•</span>
+            <button
+              type="button"
+              onClick={() => onOpenLegal && onOpenLegal('contact')}
+              className="hover:text-cyan-300 underline underline-offset-2 transition cursor-pointer"
+            >
+              Contacto
+            </button>
+          </div>
         </div>
       </div>
 
@@ -497,6 +557,7 @@ export const PlansView: React.FC<PlansViewProps> = ({
             await onRefreshSubscription();
           }}
           onShowToast={onTriggerToast}
+          onCancelPlanClick={handleCancelPlanLinkClick}
         />
       )}
     </div>

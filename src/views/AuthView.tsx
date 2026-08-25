@@ -20,10 +20,13 @@ import { CURRENCIES, CURRENCIES_BY_REGION } from '../data/currencies';
 import { api } from '../utils/api';
 import { RumbioLogo } from '../components/RumbioLogo';
 import { OtpInput } from '../components/OtpInput';
+import { LegalTab } from '../components/LegalModal';
+import { RegistrationWelcomeModal } from '../components/RegistrationWelcomeModal';
 
 interface AuthViewProps {
   onLoginSuccess: (user: User) => void;
   onShowToast: (message: string, type: 'success' | 'error' | 'warning' | 'info') => void;
+  onOpenLegal?: (tab: LegalTab) => void;
 }
 
 type AuthMode = 'login' | 'register' | 'verify' | 'forgot' | 'reset-password';
@@ -31,6 +34,7 @@ type AuthMode = 'login' | 'register' | 'verify' | 'forgot' | 'reset-password';
 export const AuthView: React.FC<AuthViewProps> = ({
   onLoginSuccess,
   onShowToast,
+  onOpenLegal,
 }) => {
   const [mode, setMode] = useState<AuthMode>('login');
   const [name, setName] = useState('');
@@ -40,6 +44,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
   const [homeCurrency, setHomeCurrency] = useState<CurrencyCode>('USD');
   const [isLoading, setIsLoading] = useState(false);
   const [logoClicks, setLogoClicks] = useState(0);
+  const [welcomeUser, setWelcomeUser] = useState<User | null>(null);
 
   const handleLogoEasterEgg = () => {
     const next = logoClicks + 1;
@@ -114,7 +119,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
     try {
       const result = await api.verifyOtp(email.trim(), verifyCode.trim());
       onShowToast('¡Cuenta verificada y protegida exitosamente!', 'success');
-      onLoginSuccess(result.user);
+      setWelcomeUser(result.user);
     } catch (err: any) {
       onShowToast(err.message || 'Código de verificación incorrecto.', 'error');
     } finally {
@@ -562,6 +567,63 @@ export const AuthView: React.FC<AuthViewProps> = ({
           </form>
         )}
       </div>
+
+      {/* Landing Legal & Trust Footer */}
+      <footer className="w-full max-w-2xl mt-8 text-center z-10 px-4 space-y-3">
+        <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-xs text-slate-400">
+          <button
+            type="button"
+            onClick={() => onOpenLegal && onOpenLegal('privacy')}
+            className="hover:text-cyan-300 transition underline underline-offset-4 cursor-pointer"
+          >
+            Política de Privacidad
+          </button>
+          <span className="text-slate-700 hidden sm:inline">•</span>
+          <button
+            type="button"
+            onClick={() => onOpenLegal && onOpenLegal('terms')}
+            className="hover:text-cyan-300 transition underline underline-offset-4 cursor-pointer"
+          >
+            Términos y Condiciones
+          </button>
+          <span className="text-slate-700 hidden sm:inline">•</span>
+          <button
+            type="button"
+            onClick={() => onOpenLegal && onOpenLegal('contact')}
+            className="hover:text-cyan-300 transition underline underline-offset-4 cursor-pointer"
+          >
+            Contacto & Soporte
+          </button>
+          <span className="text-slate-700 hidden sm:inline">•</span>
+          <button
+            type="button"
+            onClick={() => onOpenLegal && onOpenLegal('cookies')}
+            className="hover:text-cyan-300 transition underline underline-offset-4 cursor-pointer"
+          >
+            Cookies
+          </button>
+        </div>
+
+        <div className="text-[11px] text-slate-400 flex flex-wrap items-center justify-center gap-x-4 gap-y-1">
+          <span>🔒 Cifrado SSL / TLS</span>
+          <span>•</span>
+          <span>💾 Base de datos Supabase</span>
+          <span>•</span>
+          <span>🚫 Cero venta de datos personales</span>
+        </div>
+      </footer>
+
+      {/* Post-Registration Thank You & Welcome Onboarding Screen */}
+      {welcomeUser && (
+        <RegistrationWelcomeModal
+          user={welcomeUser}
+          onContinue={() => {
+            const u = welcomeUser;
+            setWelcomeUser(null);
+            onLoginSuccess(u);
+          }}
+        />
+      )}
     </div>
   );
 };

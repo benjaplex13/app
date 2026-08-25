@@ -17,12 +17,17 @@ import {
   AlertCircle,
   Clock,
   XCircle,
-  Loader2
+  Loader2,
+  FileText,
+  Cookie,
+  HelpCircle,
+  Trash2
 } from 'lucide-react';
 import { User, CurrencyCode, UserSubscription } from '../types';
 import { CURRENCIES, CURRENCIES_BY_REGION } from '../data/currencies';
 import { formatMoney } from '../utils/finance';
 import { api } from '../utils/api';
+import { LegalTab } from '../components/LegalModal';
 
 interface ProfileViewProps {
   currentUser: User;
@@ -32,6 +37,7 @@ interface ProfileViewProps {
   onUpdateBaseCurrency: (currency: CurrencyCode) => void;
   onExportAllJSON: () => void;
   onOpenExportModal?: () => void;
+  onOpenLegal?: (tab: LegalTab) => void;
   onShowToast: (msg: string, type: 'success' | 'info' | 'warning' | 'error') => void;
 }
 
@@ -43,6 +49,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   onUpdateBaseCurrency,
   onExportAllJSON,
   onOpenExportModal,
+  onOpenLegal,
   onShowToast,
 }) => {
   // Live Currency Converter state
@@ -311,6 +318,112 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
               className="w-full bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white font-semibold py-2.5 rounded-xl border border-white/10 flex items-center justify-center space-x-2 transition text-xs"
             >
               <span>Descarga Rápida de Respaldo JSON (v2.1)</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Trust, Legal & Direct Support Center */}
+      <div className="bg-white/5 p-8 rounded-[32px] border border-white/5 space-y-6">
+        <div>
+          <h3 className="text-sm font-bold uppercase tracking-widest text-slate-400 flex items-center gap-2 font-display">
+            <ShieldCheck className="w-4 h-4 text-cyan-400" /> Centro de Confianza, Legal & Soporte
+          </h3>
+          <p className="text-xs text-slate-400 mt-1">
+            Políticas transparentes, soporte directo con el desarrollador y gestión clara de tus datos.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {/* Card 1: Privacy Policy */}
+          <div className="p-5 bg-slate-900/70 border border-white/5 rounded-2xl flex flex-col justify-between space-y-3 hover:border-cyan-500/30 transition group">
+            <div className="space-y-2">
+              <div className="w-9 h-9 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+                <ShieldCheck className="w-4 h-4" />
+              </div>
+              <h4 className="text-xs font-bold text-white group-hover:text-cyan-300 transition">
+                Política de Privacidad
+              </h4>
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                Datos guardados en Supabase, cero venta a terceros y derecho total a eliminar tu cuenta.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => onOpenLegal && onOpenLegal('privacy')}
+              className="w-full py-2 bg-white/5 hover:bg-white/10 text-white rounded-xl text-xs font-semibold flex items-center justify-center space-x-1.5 transition cursor-pointer"
+            >
+              <span>Ver política</span>
+              <ArrowRight className="w-3 h-3 text-cyan-400" />
+            </button>
+          </div>
+
+          {/* Card 2: Terms & Conditions */}
+          <div className="p-5 bg-slate-900/70 border border-white/5 rounded-2xl flex flex-col justify-between space-y-3 hover:border-cyan-500/30 transition group">
+            <div className="space-y-2">
+              <div className="w-9 h-9 rounded-xl bg-blue-500/10 border border-blue-500/30 flex items-center justify-center text-blue-400">
+                <FileText className="w-4 h-4" />
+              </div>
+              <h4 className="text-xs font-bold text-white group-hover:text-cyan-300 transition">
+                Términos y Condiciones
+              </h4>
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                Planes con cancelación instantánea sin penalización y uso honesto del servicio.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => onOpenLegal && onOpenLegal('terms')}
+              className="w-full py-2 bg-white/5 hover:bg-white/10 text-white rounded-xl text-xs font-semibold flex items-center justify-center space-x-1.5 transition cursor-pointer"
+            >
+              <span>Ver términos</span>
+              <ArrowRight className="w-3 h-3 text-cyan-400" />
+            </button>
+          </div>
+
+          {/* Card 3: Contact & Support */}
+          <div className="p-5 bg-slate-900/70 border border-white/5 rounded-2xl flex flex-col justify-between space-y-3 hover:border-cyan-500/30 transition group">
+            <div className="space-y-2">
+              <div className="w-9 h-9 rounded-xl bg-purple-500/10 border border-purple-500/30 flex items-center justify-center text-purple-400">
+                <Mail className="w-4 h-4" />
+              </div>
+              <h4 className="text-xs font-bold text-white group-hover:text-cyan-300 transition">
+                Contacto & Soporte
+              </h4>
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                Escribe a <span className="text-cyan-300 font-mono">benchomateosa@gmail.com</span> para cualquier consulta.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => onOpenLegal && onOpenLegal('contact')}
+              className="w-full py-2 bg-white/5 hover:bg-white/10 text-white rounded-xl text-xs font-semibold flex items-center justify-center space-x-1.5 transition cursor-pointer"
+            >
+              <span>Contactar</span>
+              <ArrowRight className="w-3 h-3 text-cyan-400" />
+            </button>
+          </div>
+
+          {/* Card 4: Cookies & Storage */}
+          <div className="p-5 bg-slate-900/70 border border-white/5 rounded-2xl flex flex-col justify-between space-y-3 hover:border-cyan-500/30 transition group">
+            <div className="space-y-2">
+              <div className="w-9 h-9 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400">
+                <Cookie className="w-4 h-4" />
+              </div>
+              <h4 className="text-xs font-bold text-white group-hover:text-cyan-300 transition">
+                Cookies & Caché
+              </h4>
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                Almacenamiento técnico local para modo offline PWA y sesión. Cero rastreo publicitario.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => onOpenLegal && onOpenLegal('cookies')}
+              className="w-full py-2 bg-white/5 hover:bg-white/10 text-white rounded-xl text-xs font-semibold flex items-center justify-center space-x-1.5 transition cursor-pointer"
+            >
+              <span>Ver detalles</span>
+              <ArrowRight className="w-3 h-3 text-cyan-400" />
             </button>
           </div>
         </div>
