@@ -9,7 +9,8 @@ import {
   ArrowUpDown, 
   Sparkles,
   Users,
-  Download
+  Download,
+  Zap
 } from 'lucide-react';
 import { Expense, Trip, User, ExpenseCategory } from '../types';
 import { ALL_CATEGORIES, CATEGORY_DETAILS } from '../data/currencies';
@@ -20,6 +21,7 @@ interface ExpensesViewProps {
   expenses: Expense[];
   currentUser: User;
   onOpenAddModal: () => void;
+  onOpenQuickModal?: () => void;
   onEditExpense: (expense: Expense) => void;
   onDeleteExpense: (expenseId: string) => void;
   onTriggerSecret: (msg: string) => void;
@@ -31,6 +33,7 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({
   expenses,
   currentUser,
   onOpenAddModal,
+  onOpenQuickModal,
   onEditExpense,
   onDeleteExpense,
   onTriggerSecret,
@@ -98,6 +101,17 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({
             </p>
           </div>
           <div className="flex items-center gap-2.5">
+            {onOpenQuickModal && (
+              <button
+                id="quick-expense-view-btn"
+                onClick={onOpenQuickModal}
+                className="bg-gradient-to-r from-blue-600 via-cyan-500 to-emerald-400 hover:from-blue-500 hover:to-cyan-400 text-white text-xs sm:text-sm font-black px-4 sm:px-5 py-3 rounded-2xl flex items-center space-x-2 shadow-xl shadow-cyan-500/25 transition-all active:scale-95 cursor-pointer"
+                title="Registro Rápido en 5 toques estilo iOS"
+              >
+                <Zap className="w-4 h-4 text-white fill-white" />
+                <span>⚡ Rápido (10s)</span>
+              </button>
+            )}
             {onOpenExportModal && (
               <button
                 onClick={onOpenExportModal}
@@ -111,10 +125,11 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({
             <button
               id="add-expense-view-btn"
               onClick={onOpenAddModal}
-              className="bg-blue-600 hover:bg-blue-500 text-white text-xs sm:text-sm font-bold px-6 py-3 rounded-2xl flex items-center space-x-2 shadow-xl shadow-blue-600/20 transition-all active:scale-95"
+              className="bg-slate-900 hover:bg-slate-800 text-slate-200 hover:text-white text-xs sm:text-sm font-bold px-4 sm:px-5 py-3 rounded-2xl flex items-center space-x-2 border border-white/10 shadow-lg transition-all active:scale-95 cursor-pointer"
+              title="Formulario completo con OCR y notas"
             >
-              <Plus className="w-4 h-4" />
-              <span>+ Registrar Gasto</span>
+              <Plus className="w-4 h-4 text-blue-400" />
+              <span>+ Detallado</span>
             </button>
           </div>
         </div>

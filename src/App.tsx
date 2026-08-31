@@ -28,6 +28,7 @@ import { Navbar } from './components/Navbar';
 import { TabsNav } from './components/TabsNav';
 import { TripModal } from './components/TripModal';
 import { ExpenseModal } from './components/ExpenseModal';
+import { QuickExpenseModal } from './components/QuickExpenseModal';
 import { OnboardingModal } from './components/OnboardingModal';
 import { ToastContainer } from './components/ToastContainer';
 import { LogoBrandModal } from './components/LogoBrandModal';
@@ -46,6 +47,24 @@ import { LegalModal, LegalTab } from './components/LegalModal';
 import { CookieBanner } from './components/CookieBanner';
 import { NotFoundView } from './views/NotFoundView';
 import { Compass, Plus, Loader2, ShieldCheck } from 'lucide-react';
+
+const checkIsQuickAddRoute = () => {
+  if (typeof window === 'undefined') return false;
+  const path = window.location.pathname.toLowerCase();
+  const search = window.location.search.toLowerCase();
+  const hash = window.location.hash.toLowerCase();
+  return (
+    path === '/quick-add' ||
+    path === '/quick-add/' ||
+    path.startsWith('/quick-add') ||
+    path === '/quick' ||
+    path === '/quick/' ||
+    search.includes('quick-add') ||
+    search.includes('quick_add') ||
+    search.includes('shortcut=quick') ||
+    hash.includes('quick-add')
+  );
+};
 
 export function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -78,6 +97,7 @@ export function App() {
   const [isTripModalOpen, setIsTripModalOpen] = useState(false);
   const [editingTrip, setEditingTrip] = useState<Trip | null>(null);
   const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false);
+  const [isQuickExpenseOpen, setIsQuickExpenseOpen] = useState(false);
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
   const [isOnboardingOpen, setIsOnboardingOpen] = useState(false);
 
@@ -120,7 +140,7 @@ export function App() {
   }, []);
 
   // Load Trips & Expenses from Server
-  const loadUserTrips = async (preserveActiveId?: string | null) => {
+  const loadUserTrips = async (preserveActiveId?: string | null): Promise<Trip[]> => {
     try {
       const userTrips = await api.getTrips();
       setTrips(userTrips);
@@ -136,21 +156,47 @@ export function App() {
         setActiveTripId(null);
         setExpenses([]);
       }
+      return userTrips;
     } catch (err: any) {
       console.error('Error loading trips from API:', err);
+      return [];
     }
   };
 
-  // Check existing session and payment return on mount
+  // Check existing session, quick-add direct route, and payment return on mount
   useEffect(() => {
+    const isQuick = checkIsQuickAddRoute();
+    if (isQuick) {
+      try {
+        sessionStorage.setItem('rumbio_pending_quick_add', 'true');
+      } catch {}
+    }
+
     const initAuth = async () => {
       const token = getStoredToken();
       if (token) {
         try {
           const user = await api.getMe();
           setCurrentUser(user);
-          await loadUserTrips();
+          const loadedTrips = await loadUserTrips();
           await fetchSubscription();
+
+          // Check if quick add route was requested
+          const shouldTriggerQuickAdd = isQuick || sessionStorage.getItem('rumbio_pending_quick_add') === 'true';
+          if (shouldTriggerQuickAdd) {
+            try {
+              sessionStorage.removeItem('rumbio_pending_quick_add');
+            } catch {}
+            // Normalize URL to / so user stays in dashboard normally afterwards
+            window.history.replaceState({}, document.title, '/');
+
+            if (loadedTrips.length > 0) {
+              setIsQuickExpenseOpen(true);
+            } else {
+              showToast('Crea tu primer viaje para comenzar a registrar gastos con Registro Rápido.', 'info');
+              setIsTripModalOpen(true);
+            }
+          }
 
           // Check if returning from Flow.cl payment
           const urlParams = new URLSearchParams(window.location.search);
@@ -186,10 +232,42 @@ export function App() {
     }
   }, [activeTripId, currentUser]);
 
+  // Listen for browser popstate / back navigation into /quick-add
+  useEffect(() => {
+    const handlePopState = () => {
+      if (checkIsQuickAddRoute() && currentUser) {
+        window.history.replaceState({}, document.title, '/');
+        if (trips.length > 0) {
+          setIsQuickExpenseOpen(true);
+        }
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [currentUser, trips]);
+
   const handleLoginSuccess = async (user: User) => {
     setCurrentUser(user);
-    await loadUserTrips();
+    const loadedTrips = await loadUserTrips();
     await fetchSubscription();
+
+    const wasPendingQuickAdd = 
+      checkIsQuickAddRoute() || 
+      sessionStorage.getItem('rumbio_pending_quick_add') === 'true';
+
+    if (wasPendingQuickAdd) {
+      try {
+        sessionStorage.removeItem('rumbio_pending_quick_add');
+      } catch {}
+      window.history.replaceState({}, document.title, '/');
+
+      if (loadedTrips.length > 0) {
+        setIsQuickExpenseOpen(true);
+      } else {
+        showToast('Crea tu primer viaje para comenzar a registrar gastos con Registro Rápido.', 'info');
+        setIsTripModalOpen(true);
+      }
+    }
   };
 
   const handleLogout = () => {
@@ -574,6 +652,9 @@ export function App() {
                       setEditingExpense(null);
                       setIsExpenseModalOpen(true);
                     }}
+                    onOpenQuickExpenseModal={() => {
+                      setIsQuickExpenseOpen(true);
+                    }}
                     onOpenEditTripModal={() => {
                       setEditingTrip(activeTrip);
                       setIsTripModalOpen(true);
@@ -601,6 +682,9 @@ export function App() {
                     onOpenAddModal={() => {
                       setEditingExpense(null);
                       setIsExpenseModalOpen(true);
+                    }}
+                    onOpenQuickModal={() => {
+                      setIsQuickExpenseOpen(true);
                     }}
                     onEditExpense={(exp) => {
                       setEditingExpense(exp);
@@ -754,7 +838,7 @@ export function App() {
         />
       )}
 
-      {/* Expense Modal */}
+      {/* Expense Modal (Full detailed form) */}
       {isExpenseModalOpen && currentUser && activeTrip && (
         <ExpenseModal
           expense={editingExpense}
@@ -770,6 +854,45 @@ export function App() {
           onOpenUpgradeGate={openUpgradeGate}
           onShowToast={showToast}
         />
+      )}
+
+      {/* Quick Expense Bottom Sheet (iOS-Style Fast 5-Step Entry) */}
+      {isQuickExpenseOpen && currentUser && activeTrip && (
+        <QuickExpenseModal
+          isOpen={isQuickExpenseOpen}
+          onClose={() => setIsQuickExpenseOpen(false)}
+          trip={activeTrip}
+          currentUser={currentUser}
+          onSave={handleSaveExpense}
+          onOpenFullForm={() => {
+            setIsQuickExpenseOpen(false);
+            setEditingExpense(null);
+            setIsExpenseModalOpen(true);
+          }}
+          onShowToast={showToast}
+        />
+      )}
+
+      {/* Floating Quick Expense Button (iOS-Style Fast Entry FAB) */}
+      {currentUser && activeTrip && currentTab !== 'chat' && (
+        <button
+          id="floating-quick-expense-btn"
+          type="button"
+          onClick={() => setIsQuickExpenseOpen(true)}
+          className="fixed bottom-6 right-6 z-40 bg-gradient-to-r from-blue-600 via-cyan-500 to-emerald-400 hover:from-blue-500 hover:to-cyan-400 text-white font-black p-3.5 sm:px-5 sm:py-3 rounded-full shadow-2xl shadow-cyan-500/40 border border-cyan-300/40 flex items-center space-x-2.5 transition transform hover:scale-105 active:scale-95 group cursor-pointer"
+          title="Registro Rápido de Gasto (Atajo Rumbio)"
+          aria-label="Registrar gasto rápido"
+        >
+          <div className="w-7 h-7 rounded-full bg-slate-950/70 flex items-center justify-center border border-cyan-300/40 group-hover:rotate-90 transition-transform duration-300">
+            <Plus className="w-4 h-4 text-cyan-300 stroke-[3]" />
+          </div>
+          <span className="text-xs sm:text-sm font-extrabold tracking-wide font-display">
+            + Gasto Rápido
+          </span>
+          <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full bg-slate-950/70 text-emerald-300 border border-emerald-400/30 hidden sm:inline">
+            10s
+          </span>
+        </button>
       )}
 
       {/* PWA Floating Compact Summary Widget (Pro Feature) */}

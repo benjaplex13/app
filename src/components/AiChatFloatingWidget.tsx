@@ -161,13 +161,13 @@ export const AiChatFloatingWidget: React.FC<AiChatFloatingWidgetProps> = ({
               setIsOpen(true);
             }
           }}
-          className="fixed bottom-6 right-6 z-40 bg-gradient-to-r from-blue-600 via-cyan-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white font-bold px-4 py-3 rounded-full shadow-2xl shadow-cyan-500/30 border border-cyan-400/40 flex items-center space-x-2.5 transition transform hover:scale-105 active:scale-95 group"
+          className="fixed bottom-6 left-6 z-40 bg-gradient-to-r from-blue-600 via-cyan-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white font-bold px-3.5 py-3 rounded-full shadow-2xl shadow-cyan-500/30 border border-cyan-400/40 flex items-center space-x-2 transition transform hover:scale-105 active:scale-95 group"
           title="Abrir Asistente Financiero con IA"
         >
           <div className="w-7 h-7 rounded-full bg-slate-950/60 flex items-center justify-center border border-cyan-400/30">
             <Sparkles className="w-4 h-4 text-cyan-300 group-hover:rotate-12 transition-transform" />
           </div>
-          <span className="text-xs tracking-wide">Asistente IA</span>
+          <span className="text-xs tracking-wide hidden sm:inline">Asistente IA</span>
           <span className="text-[9px] font-extrabold uppercase px-1.5 py-0.5 rounded-full bg-cyan-950/80 text-cyan-300 border border-cyan-400/30">
             {isProOrPremium ? 'PRO' : 'VIP'}
           </span>

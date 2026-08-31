@@ -12,7 +12,8 @@ import {
   DollarSign, 
   Loader2,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  Zap
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { CurrencyCode, User } from '../types';
@@ -45,6 +46,23 @@ export const AuthView: React.FC<AuthViewProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [logoClicks, setLogoClicks] = useState(0);
   const [welcomeUser, setWelcomeUser] = useState<User | null>(null);
+  const [isQuickAddIntent, setIsQuickAddIntent] = useState(false);
+
+  useEffect(() => {
+    try {
+      const path = window.location.pathname.toLowerCase();
+      const search諮 = window.location.search.toLowerCase();
+      if (
+        path.startsWith('/quick-add') ||
+        path.startsWith('/quick') ||
+        search諮.includes('quick-add') ||
+        sessionStorage.getItem('rumbio_pending_quick_add') === 'true'
+      ) {
+        setIsQuickAddIntent(true);
+        sessionStorage.setItem('rumbio_pending_quick_add', 'true');
+      }
+    } catch {}
+  }, []);
 
   const handleLogoEasterEgg = () => {
     const next = logoClicks + 1;
@@ -213,6 +231,24 @@ export const AuthView: React.FC<AuthViewProps> = ({
             Finanzas de Viaje • Control Total de Presupuesto
           </p>
         </div>
+
+        {/* Quick Add Intent Notice */}
+        {isQuickAddIntent && (
+          <div className="mb-6 bg-gradient-to-r from-cyan-950/90 to-blue-950/90 border border-cyan-500/40 rounded-2xl p-3.5 flex items-center space-x-3 shadow-lg shadow-cyan-500/10 animate-in fade-in slide-in-from-top-2 duration-300">
+            <div className="w-8 h-8 rounded-xl bg-cyan-500/20 border border-cyan-400/30 flex items-center justify-center shrink-0">
+              <Zap className="w-4 h-4 text-cyan-400 fill-cyan-400 animate-pulse" />
+            </div>
+            <div className="flex-1 text-left">
+              <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                Atajo de Registro Rápido
+                <span className="text-[9px] bg-cyan-400/20 text-cyan-300 px-1.5 py-0.5 rounded-full font-mono">10s</span>
+              </div>
+              <p className="text-[11px] text-cyan-200/80 leading-snug">
+                Inicia sesión para abrir directamente la hoja de registro de gastos.
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* ================= LOGIN FORM ================= */}
         {mode === 'login' && (

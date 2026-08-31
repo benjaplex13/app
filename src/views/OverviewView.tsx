@@ -17,7 +17,8 @@ import {
   ArrowRight,
   Building2,
   Briefcase,
-  BarChart3
+  BarChart3,
+  Zap
 } from 'lucide-react';
 import { Trip, Expense, User, UserSubscription } from '../types';
 import { CURRENCIES, CATEGORY_DETAILS } from '../data/currencies';
@@ -35,6 +36,7 @@ interface OverviewViewProps {
   currentUser: User;
   subscription?: UserSubscription | null;
   onOpenExpenseModal: () => void;
+  onOpenQuickExpenseModal?: () => void;
   onOpenEditTripModal: () => void;
   onNavigateToExpenses?: () => void;
   onEditExpense?: (expense: Expense) => void;
@@ -53,6 +55,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
   currentUser,
   subscription,
   onOpenExpenseModal,
+  onOpenQuickExpenseModal,
   onOpenEditTripModal,
   onNavigateToExpenses,
   onEditExpense,
@@ -128,13 +131,26 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
 
           {/* Action Buttons */}
           <div className="flex flex-wrap items-center gap-2.5">
+            {onOpenQuickExpenseModal && (
+              <button
+                id="quick-expense-overview-btn"
+                onClick={onOpenQuickExpenseModal}
+                className="bg-gradient-to-r from-blue-600 via-cyan-500 to-emerald-400 hover:from-blue-500 hover:to-cyan-400 text-white text-xs sm:text-sm font-black px-5 py-3 rounded-2xl flex items-center space-x-2 shadow-xl shadow-cyan-500/25 transition-all active:scale-95 cursor-pointer"
+                title="Registro Rápido en 5 toques estilo iOS"
+              >
+                <Zap className="w-4 h-4 text-white fill-white" />
+                <span>⚡ Rápido (10s)</span>
+              </button>
+            )}
+
             <button
               id="add-expense-overview-btn"
               onClick={onOpenExpenseModal}
-              className="bg-blue-600 hover:bg-blue-500 text-white text-xs sm:text-sm font-bold px-6 py-3 rounded-2xl flex items-center space-x-2 shadow-xl shadow-blue-600/20 transition-all active:scale-95"
+              className="bg-slate-900 hover:bg-slate-800 text-slate-200 hover:text-white text-xs sm:text-sm font-bold px-5 py-3 rounded-2xl flex items-center space-x-2 border border-white/10 shadow-lg transition-all active:scale-95 cursor-pointer"
+              title="Formulario completo con desglose, OCR y notas"
             >
-              <PlusCircle className="w-4 h-4" />
-              <span>+ Registrar Gasto</span>
+              <PlusCircle className="w-4 h-4 text-blue-400" />
+              <span>+ Detallado</span>
             </button>
 
             {/* Premium Button: Bank Sync */}
