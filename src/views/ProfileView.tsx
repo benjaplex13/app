@@ -28,6 +28,7 @@ import { CURRENCIES, CURRENCIES_BY_REGION } from '../data/currencies';
 import { formatMoney } from '../utils/finance';
 import { api } from '../utils/api';
 import { LegalTab } from '../components/LegalModal';
+import { hasUnlimitedAccess } from '../data/plans';
 
 interface ProfileViewProps {
   currentUser: User;
@@ -123,14 +124,16 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
               <div>
                 <span className="block text-[10px] uppercase font-bold text-slate-400">Plan Actual</span>
                 <span className="text-sm font-bold text-white uppercase flex items-center gap-1.5 mt-0.5">
-                  {plan === 'premium' ? (
+                  {hasUnlimitedAccess(userSubscription) ? (
+                    <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                  ) : plan === 'premium' ? (
                     <Crown className="w-4 h-4 text-amber-400" />
                   ) : plan === 'pro' ? (
                     <Sparkles className="w-4 h-4 text-cyan-400" />
                   ) : (
                     <Zap className="w-4 h-4 text-slate-400" />
                   )}
-                  {plan.toUpperCase()}
+                  {hasUnlimitedAccess(userSubscription) ? 'DEVELOPER (UNLIMITED)' : plan.toUpperCase()}
                 </span>
               </div>
               {onOpenPlans && (

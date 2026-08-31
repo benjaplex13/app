@@ -1,4 +1,30 @@
-import { PlanPricing, PlanLimits, PlanTier } from '../types';
+import { PlanPricing, PlanLimits, PlanTier, UserSubscription } from '../types';
+
+/**
+ * Central function to verify if a plan or subscription has unrestricted developer access (100% bypass of all limits)
+ */
+export function hasUnlimitedAccess(planOrSub: PlanTier | UserSubscription | string | null | undefined): boolean {
+  if (!planOrSub) return false;
+  const plan = typeof planOrSub === 'object' ? planOrSub.plan : planOrSub;
+  return typeof plan === 'string' && plan.toLowerCase() === 'developer';
+}
+
+/**
+ * Central function to verify if a user has access to a required tier.
+ * Developer plan ALWAYS grants full bypass and returns true for all tiers and features.
+ */
+export function hasTierAccess(
+  userPlanOrSub: PlanTier | UserSubscription | string | null | undefined,
+  requiredTier: 'free' | 'pro' | 'premium'
+): boolean {
+  if (hasUnlimitedAccess(userPlanOrSub)) return true;
+  if (!userPlanOrSub) return requiredTier === 'free';
+  const plan = (typeof userPlanOrSub === 'object' ? userPlanOrSub.plan : userPlanOrSub || 'free').toLowerCase();
+  if (requiredTier === 'free') return true;
+  if (requiredTier === 'pro') return plan === 'pro' || plan === 'premium';
+  if (requiredTier === 'premium') return plan === 'premium';
+  return false;
+}
 
 export const PLAN_LIMITS: Record<PlanTier, PlanLimits> = {
   free: {

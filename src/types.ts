@@ -325,6 +325,7 @@ export interface UserSubscription {
     flowConfigured: boolean;
     flowSandbox: boolean;
     flowEndpoint: string;
+    demoCheckoutEnabled?: boolean;
   };
 }
 

@@ -15,6 +15,7 @@ import {
   SyncResult 
 } from '../utils/offlineSync';
 import { UserSubscription } from '../types';
+import { hasTierAccess } from '../data/plans';
 
 interface OfflineSyncBannerProps {
   subscription: UserSubscription | null;
@@ -29,7 +30,7 @@ export const OfflineSyncBanner: React.FC<OfflineSyncBannerProps> = ({
   onSyncComplete,
   onShowToast,
 }) => {
-  const isPro = subscription ? subscription.plan !== 'free' : false;
+  const isPro = hasTierAccess(subscription, 'pro');
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
   const [pendingCount, setPendingCount] = useState<number>(0);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);

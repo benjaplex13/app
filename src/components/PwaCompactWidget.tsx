@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { Trip, Expense, User, UserSubscription } from '../types';
 import { convertToHomeCurrency, formatMoney } from '../utils/finance';
+import { hasTierAccess } from '../data/plans';
 
 interface PwaCompactWidgetProps {
   trip: Trip | null;
@@ -32,7 +33,7 @@ export const PwaCompactWidget: React.FC<PwaCompactWidgetProps> = ({
   onOpenAppTab,
   onOpenUpgradeGate,
 }) => {
-  const isPro = subscription ? subscription.plan !== 'free' : false;
+  const isPro = hasTierAccess(subscription, 'pro');
   const [isMinimized, setIsMinimized] = useState(() => {
     return localStorage.getItem('rumbio_widget_minimized') === 'true';
   });

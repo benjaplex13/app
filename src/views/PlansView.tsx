@@ -16,9 +16,9 @@ import {
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { UserSubscription, PlanTier, BillingCycle, User } from '../types';
-import { PLANS, PLAN_LIMITS } from '../data/plans';
+import { PLANS, PLAN_LIMITS, hasUnlimitedAccess } from '../data/plans';
 import { api } from '../utils/api';
-import { CheckoutModal, DEMO_AUTO_ACTIVATE_MODE } from '../components/CheckoutModal';
+import { CheckoutModal } from '../components/CheckoutModal';
 import { LegalTab } from '../components/LegalModal';
 
 interface PlansViewProps {
@@ -74,10 +74,8 @@ export const PlansView: React.FC<PlansViewProps> = ({
       return;
     }
 
-    // ============================================================================
-    // TEMPORARY DEMO MODE: Open Checkout Modal with instant auto-activation
-    // ============================================================================
-    if (DEMO_AUTO_ACTIVATE_MODE) {
+    // Demo mode is ONLY enabled if the environment explicitly configured DEMO_CHECKOUT_ENABLED='true'
+    if (subscription?.diagnostics?.demoCheckoutEnabled) {
       setCheckoutPlan(planTier);
       return;
     }
@@ -180,37 +178,57 @@ export const PlansView: React.FC<PlansViewProps> = ({
         </div>
       )}
 
-      {/* Current Subscription Status Bar if paid */}
+      {/* Current Subscription Status Bar if paid or developer */}
       {subscription && subscription.plan !== 'free' && (
         <div className={`mb-8 max-w-4xl mx-auto rounded-3xl p-5 sm:p-6 transition-all ${
-          subscription.status === 'canceled'
+          hasUnlimitedAccess(subscription)
+            ? 'bg-gradient-to-r from-emerald-950/40 via-slate-900/90 to-[#070b16] border border-emerald-500/40 shadow-xl shadow-emerald-500/10'
+            : subscription.status === 'canceled'
             ? 'bg-gradient-to-r from-amber-950/40 via-slate-900/90 to-[#070b16] border border-amber-500/40 shadow-xl shadow-amber-500/5'
             : 'bg-gradient-to-r from-blue-950/40 via-slate-900/90 to-[#070b16] border border-cyan-500/40 shadow-xl shadow-cyan-500/5'
         }`}>
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
             <div className="flex items-start sm:items-center space-x-3.5">
               <div className={`w-12 h-12 rounded-2xl flex items-center justify-center font-bold shrink-0 ${
-                subscription.plan === 'premium'
+                hasUnlimitedAccess(subscription)
+                  ? 'bg-emerald-950/80 border border-emerald-500/40 text-emerald-400'
+                  : subscription.plan === 'premium'
                   ? 'bg-amber-950/80 border border-amber-500/40 text-amber-400'
                   : 'bg-cyan-950/80 border border-cyan-500/40 text-cyan-400'
               }`}>
-                {subscription.plan === 'premium' ? <Crown className="w-6 h-6" /> : <Sparkles className="w-6 h-6" />}
+                {hasUnlimitedAccess(subscription) ? (
+                  <ShieldCheck className="w-6 h-6" />
+                ) : subscription.plan === 'premium' ? (
+                  <Crown className="w-6 h-6" />
+                ) : (
+                  <Sparkles className="w-6 h-6" />
+                )}
               </div>
               <div>
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-base font-black text-white uppercase tracking-wide">
-                    Plan Actual: {subscription.plan.toUpperCase()}
+                    Plan Actual: {hasUnlimitedAccess(subscription) ? 'DEVELOPER (ACCESO ILIMITADO)' : subscription.plan.toUpperCase()}
                   </span>
                   <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${
-                    subscription.status === 'active'
+                    hasUnlimitedAccess(subscription)
+                      ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500/40'
+                      : subscription.status === 'active'
                       ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500/40'
                       : 'bg-amber-950/80 text-amber-300 border-amber-500/40'
                   }`}>
-                    {subscription.status === 'active' ? '● Suscripción Activa' : '● Cancelada (En período de gracia)'}
+                    {hasUnlimitedAccess(subscription)
+                      ? '● Cuenta de Propietario / Verificada'
+                      : subscription.status === 'active'
+                      ? '● Suscripción Activa'
+                      : '● Cancelada (En período de gracia)'}
                   </span>
                 </div>
 
-                {subscription.status === 'canceled' ? (
+                {hasUnlimitedAccess(subscription) ? (
+                  <p className="text-xs text-emerald-300 mt-1 font-medium leading-relaxed">
+                    Tienes acceso total e ilimitado a todas las herramientas Pro, Premium y futuras sin ninguna restricción de uso, viajes ni mensajes de IA.
+                  </p>
+                ) : subscription.status === 'canceled' ? (
                   <p className="text-xs text-amber-200 mt-1 font-medium leading-relaxed">
                     {subscription.currentPeriodEnd ? (
                       <>
@@ -248,8 +266,8 @@ export const PlansView: React.FC<PlansViewProps> = ({
               </div>
             </div>
 
-            {/* Cancel Plan Button - only shown if paid plan is active */}
-            {subscription.status === 'active' && (
+            {/* Cancel Plan Button - only shown if paid plan is active and not developer */}
+            {subscription.status === 'active' && !hasUnlimitedAccess(subscription) && (
               <button
                 id="cancel-plan-btn"
                 onClick={() => setShowCancelConfirm(true)}

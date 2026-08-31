@@ -18,6 +18,7 @@ import {
 import { Trip, Expense, User, UserSubscription } from '../types';
 import { formatMoney } from '../utils/finance';
 import { api } from '../utils/api';
+import { hasTierAccess } from '../data/plans';
 
 interface ProactiveAdvisorBannerProps {
   trip: Trip;
@@ -36,7 +37,7 @@ export const ProactiveAdvisorBanner: React.FC<ProactiveAdvisorBannerProps> = ({
   onOpenPlans,
   onShowToast,
 }) => {
-  const isPremium = subscription?.plan === 'premium';
+  const isPremium = hasTierAccess(subscription, 'premium');
 
   const [isLoading, setIsLoading] = useState(false);
   const [adviceData, setAdviceData] = useState<any>(null);

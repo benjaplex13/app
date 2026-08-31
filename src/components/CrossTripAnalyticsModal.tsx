@@ -18,6 +18,7 @@ import {
 import { Trip, Expense, User, UserSubscription, CurrencyCode } from '../types';
 import { formatMoney, convertToHomeCurrency } from '../utils/finance';
 import { api } from '../utils/api';
+import { hasTierAccess } from '../data/plans';
 
 interface CrossTripAnalyticsModalProps {
   isOpen: boolean;
@@ -40,7 +41,7 @@ export const CrossTripAnalyticsModal: React.FC<CrossTripAnalyticsModalProps> = (
   onOpenPlans,
   onShowToast,
 }) => {
-  const isPremium = subscription?.plan === 'premium';
+  const isPremium = hasTierAccess(subscription, 'premium');
 
   // Projection state
   const [activeTab, setActiveTab] = useState<'comparison' | 'projection'>('comparison');

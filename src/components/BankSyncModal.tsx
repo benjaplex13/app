@@ -19,6 +19,7 @@ import {
 import { Trip, User, UserSubscription, ExpenseCategory, CurrencyCode } from '../types';
 import { formatMoney } from '../utils/finance';
 import { api } from '../utils/api';
+import { hasTierAccess } from '../data/plans';
 
 interface BankSyncModalProps {
   isOpen: boolean;
@@ -53,7 +54,7 @@ export const BankSyncModal: React.FC<BankSyncModalProps> = ({
   onShowToast,
   onOpenPlans,
 }) => {
-  const isPremium = subscription?.plan === 'premium';
+  const isPremium = hasTierAccess(subscription, 'premium');
 
   const [isLoadingConfig, setIsLoadingConfig] = useState(false);
   const [bankingConfig, setBankingConfig] = useState<any>(null);

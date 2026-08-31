@@ -25,6 +25,7 @@ import { Expense, Trip, CurrencyCode, ExpenseCategory, User, UserSubscription } 
 import { ALL_CATEGORIES, CATEGORY_DETAILS, CURRENCIES, CURRENCIES_BY_REGION } from '../data/currencies';
 import { convertToHomeCurrency, formatMoney } from '../utils/finance';
 import { api } from '../utils/api';
+import { hasTierAccess, hasUnlimitedAccess } from '../data/plans';
 
 interface ExpenseModalProps {
   expense?: Expense | null;
@@ -49,7 +50,7 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
   onOpenUpgradeGate,
   onShowToast,
 }) => {
-  const isPro = subscription ? subscription.plan !== 'free' : false;
+  const isPro = hasTierAccess(subscription, 'pro');
 
   const [title, setTitle] = useState(expense?.title || '');
   const [amount, setAmount] = useState(expense ? expense.amount.toString() : '');

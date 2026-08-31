@@ -18,9 +18,6 @@ import { User, PlanTier, BillingCycle, UserSubscription } from '../types';
 import { PLANS_DATA } from '../data/plans';
 import { api } from '../utils/api';
 
-// Export flag for demo mode toggle
-export const DEMO_AUTO_ACTIVATE_MODE = true;
-
 interface CheckoutModalProps {
   isOpen: boolean;
   onClose: () => void;

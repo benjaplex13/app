@@ -131,10 +131,29 @@ export interface UserSubscriptionResponse {
     flowConfigured: boolean;
     flowSandbox: boolean;
     flowEndpoint: string;
+    demoCheckoutEnabled?: boolean;
   };
 }
 
-const JWT_SECRET = process.env.JWT_SECRET || 'rumbio_super_secure_jwt_secret_2026_travel_finance';
+// ============================================================================
+// JWT SECRET RESOLUTION (Strict OWASP Secret Validation - No Default Fallbacks)
+// ============================================================================
+export function getJwtSecret(): string {
+  const secret = process.env.JWT_SECRET?.trim();
+
+  // In all environments, JWT_SECRET must be explicitly provided in environment variables
+  if (!secret) {
+    console.error('[SECURITY CRITICAL] Variable de entorno JWT_SECRET no configurada. La aplicación no puede iniciar de forma segura.');
+    throw new Error('CRITICAL SECURITY ERROR: La variable de entorno JWT_SECRET no está configurada en el servidor. Debe definirse con un secreto de alta entropía (mínimo 32 caracteres).');
+  }
+
+  if (secret.length < 32) {
+    console.error('[SECURITY CRITICAL] JWT_SECRET es demasiado corta (mínimo 32 caracteres requeridos).');
+    throw new Error('CRITICAL SECURITY ERROR: La variable de entorno JWT_SECRET es insegura por longitud insuficiente (mínimo 32 caracteres requeridos).');
+  }
+
+  return secret;
+}
 
 // ============================================================================
 // SUPABASE CLIENT (Lazy Initialization & Safe Diagnostics)
@@ -548,7 +567,45 @@ function mapExpenseFromDb(row: any): ExpenseDoc {
 }
 
 // ============================================================================
-// REAL EMAIL SENDER WITH BREVO & AUDIT LOG IN SUPABASE
+// CRYPTOGRAPHIC OTP & AUTH SECURITY HELPERS (OWASP ASVS / Top 10 Compliant)
+// ============================================================================
+export function generateSecureOtp(): string {
+  // Uses cryptographically secure pseudorandom number generator (CSPRNG)
+  return crypto.randomInt(100000, 1000000).toString();
+}
+
+export function hashOtp(code: string): string {
+  return crypto.createHash('sha256').update(code.trim()).digest('hex');
+}
+
+export function verifyOtpMatch(inputCode: string, storedHashOrPlain: string | null | undefined): boolean {
+  if (!storedHashOrPlain || !inputCode) return false;
+  const cleanInput = inputCode.trim();
+  const inputHash = hashOtp(cleanInput);
+
+  // 1. Check SHA-256 hash match using constant-time comparison
+  if (storedHashOrPlain.length === 64) {
+    try {
+      const a = Buffer.from(inputHash, 'hex');
+      const b = Buffer.from(storedHashOrPlain, 'hex');
+      return a.length === b.length && crypto.timingSafeEqual(a, b);
+    } catch {
+      return false;
+    }
+  }
+
+  // 2. Fallback check for legacy plain-text OTPs during database migration
+  try {
+    const a = Buffer.from(cleanInput);
+    const b = Buffer.from(storedHashOrPlain);
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+  } catch {
+    return false;
+  }
+}
+
+// ============================================================================
+// REAL EMAIL SENDER WITH BREVO & SANITIZED AUDIT LOG IN SUPABASE
 // ============================================================================
 async function sendEmailNotification(
   to: string,
@@ -560,6 +617,9 @@ async function sendEmailNotification(
   const foundKeyInfo = findBrevoKeyInEnv();
   const brevoDiag = getBrevoKeyDiagnostics();
 
+  // Mask recipient and NEVER persist plain-text OTP in logs (OWASP A02 & CWE-532)
+  const maskedTo = to.replace(/(?<=^.{2}).*(?=@)/, '***');
+
   if (!foundKeyInfo || !foundKeyInfo.key) {
     const errorMsg =
       'El servicio de correo no está disponible: la variable BREVO_API_KEY no está configurada en las variables de entorno de Vercel/Servidor. Configúrala junto con BREVO_FROM_EMAIL para enviar códigos reales.';
@@ -568,11 +628,11 @@ async function sendEmailNotification(
     try {
       const supabase = getSupabase();
       await supabase.from('email_logs').insert({
-        id: 'email_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
-        to_email: to,
+        id: 'email_' + Date.now() + '_' + crypto.randomBytes(4).toString('hex'),
+        to_email: maskedTo,
         subject,
         type,
-        code,
+        code: '******',
         status: 'failed',
         error: errorMsg,
         created_at: new Date().toISOString(),
@@ -654,11 +714,11 @@ async function sendEmailNotification(
     try {
       const supabase = getSupabase();
       await supabase.from('email_logs').insert({
-        id: 'email_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
-        to_email: to,
+        id: 'email_' + Date.now() + '_' + crypto.randomBytes(4).toString('hex'),
+        to_email: maskedTo,
         subject,
         type,
-        code,
+        code: '******',
         status: 'failed',
         error: errorMsg,
         created_at: new Date().toISOString(),
@@ -673,11 +733,11 @@ async function sendEmailNotification(
   try {
     const supabase = getSupabase();
     await supabase.from('email_logs').insert({
-      id: 'email_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
-      to_email: to,
+      id: 'email_' + Date.now() + '_' + crypto.randomBytes(4).toString('hex'),
+      to_email: maskedTo,
       subject,
       type,
-      code,
+      code: '******',
       status: 'sent_brevo',
       created_at: new Date().toISOString(),
     });
@@ -781,7 +841,29 @@ export const forgotPasswordRateLimiter = new InMemoryRateLimiter(3, 15 * 60 * 10
 export const resetPasswordRateLimiter = new InMemoryRateLimiter(5, 15 * 60 * 1000, 15 * 60 * 1000);
 
 // ============================================================================
-// DAILY AI MESSAGE QUOTA SYSTEM (Plan-based: Pro = 20 msgs/day, Premium = 50 msgs/day)
+// CENTRAL UNLIMITED DEVELOPER & TIER ACCESS CONTROL
+// ============================================================================
+export function hasUnlimitedAccess(planOrSub: string | { plan?: string } | null | undefined): boolean {
+  if (!planOrSub) return false;
+  const plan = typeof planOrSub === 'string' ? planOrSub : planOrSub.plan;
+  return typeof plan === 'string' && plan.toLowerCase() === 'developer';
+}
+
+export function hasTierAccess(
+  planOrSub: string | { plan?: string } | null | undefined,
+  requiredTier: 'free' | 'pro' | 'premium'
+): boolean {
+  if (hasUnlimitedAccess(planOrSub)) return true;
+  if (!planOrSub) return requiredTier === 'free';
+  const plan = (typeof planOrSub === 'string' ? planOrSub : planOrSub.plan || 'free').toLowerCase();
+  if (requiredTier === 'free') return true;
+  if (requiredTier === 'pro') return plan === 'pro' || plan === 'premium';
+  if (requiredTier === 'premium') return plan === 'premium';
+  return false;
+}
+
+// ============================================================================
+// DAILY AI MESSAGE QUOTA SYSTEM (Plan-based: Pro = 20 msgs/day, Premium = 50 msgs/day, Developer = Unlimited)
 // ============================================================================
 interface DailyAiQuotaRecord {
   date: string; // YYYY-MM-DD
@@ -796,9 +878,10 @@ export class DailyAiQuotaTracker {
   }
 
   public getLimitForPlan(plan: string): number {
+    if (hasUnlimitedAccess(plan)) {
+      return 999999;
+    }
     switch (plan.toLowerCase()) {
-      case 'developer':
-        return 999999;
       case 'premium':
         return 50;
       case 'pro':
@@ -809,6 +892,9 @@ export class DailyAiQuotaTracker {
   }
 
   public check(userId: string, plan: string): { allowed: boolean; used: number; limit: number; remaining: number } {
+    if (hasUnlimitedAccess(plan)) {
+      return { allowed: true, used: 0, limit: 999999, remaining: 999999 };
+    }
     const today = this.getTodayKey();
     const limit = this.getLimitForPlan(plan);
     const record = this.userUsage.get(userId);
@@ -827,6 +913,9 @@ export class DailyAiQuotaTracker {
   }
 
   public increment(userId: string, plan: string): { allowed: boolean; used: number; limit: number; remaining: number } {
+    if (hasUnlimitedAccess(plan)) {
+      return { allowed: true, used: 0, limit: 999999, remaining: 999999 };
+    }
     const today = this.getTodayKey();
     const limit = this.getLimitForPlan(plan);
     let record = this.userUsage.get(userId);
@@ -851,9 +940,18 @@ export class DailyAiQuotaTracker {
 export const dailyAiQuotaTracker = new DailyAiQuotaTracker();
 
 export function getClientIp(req: Request): string {
+  const cfConnectingIp = req.headers['cf-connecting-ip'];
+  if (typeof cfConnectingIp === 'string' && cfConnectingIp.trim().length > 0) {
+    return cfConnectingIp.trim();
+  }
+  const xRealIp = req.headers['x-real-ip'];
+  if (typeof xRealIp === 'string' && xRealIp.trim().length > 0) {
+    return xRealIp.trim();
+  }
   const forwarded = req.headers['x-forwarded-for'];
   if (typeof forwarded === 'string' && forwarded.length > 0) {
-    return forwarded.split(',')[0].trim();
+    const firstIp = forwarded.split(',')[0].trim();
+    if (firstIp.length > 0) return firstIp;
   }
   return req.socket.remoteAddress || '127.0.0.1';
 }
@@ -862,7 +960,7 @@ export function getClientIp(req: Request): string {
 export const revokedUserTokens = new Map<string, number>();
 
 // ============================================================================
-// INPUT SANITIZATION & STRICT VALIDATION HELPERS
+// INPUT SANITIZATION & STRICT VALIDATION HELPERS (OWASP ASVS Compliant)
 // ============================================================================
 export function sanitizeString(val: any, maxLength = 255): string {
   if (val === undefined || val === null) return '';
@@ -891,12 +989,37 @@ export function validatePassword(password: any): { valid: boolean; error?: strin
   if (!password || typeof password !== 'string') {
     return { valid: false, error: 'La contraseña es obligatoria.' };
   }
-  if (password.length < 6) {
-    return { valid: false, error: 'La contraseña debe tener al menos 6 caracteres.' };
+  // Enforce minimum 8 characters (OWASP ASVS Standard)
+  if (password.length < 8) {
+    return { valid: false, error: 'La contraseña debe tener al menos 8 caracteres.' };
   }
   if (password.length > 128) {
     return { valid: false, error: 'La contraseña no debe superar los 128 caracteres.' };
   }
+
+  const hasUpperCase = /[A-Z]/.test(password);
+  const hasLowerCase = /[a-z]/.test(password);
+  const hasNumberOrSymbol = /[0-9!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?~`]/.test(password);
+
+  if (!hasUpperCase || !hasLowerCase || !hasNumberOrSymbol) {
+    return {
+      valid: false,
+      error: 'La contraseña debe incluir al menos una letra mayúscula, una minúscula y al menos un número o símbolo especial.',
+    };
+  }
+
+  // Blacklist common compromised passwords
+  const commonWeak = [
+    'password', 'password123', '12345678', '123456789', 'admin123', 'qwerty123',
+    'contrasena', 'contraseña', 'welcome1', 'iloveyou', 'abc12345', 'pass1234',
+  ];
+  if (commonWeak.includes(password.toLowerCase().trim())) {
+    return {
+      valid: false,
+      error: 'Esta contraseña es demasiado predecible y vulnerable. Elige una más segura.',
+    };
+  }
+
   return { valid: true };
 }
 
@@ -968,7 +1091,8 @@ export function verifyAuth(req: AuthenticatedRequest, res: Response, next: NextF
 
   const token = authHeader.split(' ')[1];
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as { id: string; email: string; name: string; iat?: number };
+    const jwtSecret = getJwtSecret();
+    const decoded = jwt.verify(token, jwtSecret) as { id: string; email: string; name: string; iat?: number };
     
     // Check if session was revoked due to password reset or change
     if (decoded.iat && revokedUserTokens.has(decoded.id)) {
@@ -1280,8 +1404,8 @@ export async function getUserSubscription(userId: string): Promise<UserSubscript
     }
   }
 
-  const isProOrAbove = effectivePlan === 'pro' || effectivePlan === 'premium' || effectivePlan === 'developer';
-  const isPremiumOrAbove = effectivePlan === 'premium' || effectivePlan === 'developer';
+  const isProOrAbove = hasTierAccess(effectivePlan, 'pro');
+  const isPremiumOrAbove = hasTierAccess(effectivePlan, 'premium');
 
   return {
     id: sub.id,
@@ -1295,8 +1419,8 @@ export async function getUserSubscription(userId: string): Promise<UserSubscript
     createdAt: sub.createdAt,
     updatedAt: sub.updatedAt,
     limits: {
-      maxActiveTrips: effectivePlan === 'free' ? 1 : 999999,
-      maxCurrenciesPerTrip: effectivePlan === 'free' ? 2 : 999999,
+      maxActiveTrips: hasUnlimitedAccess(effectivePlan) ? 999999 : (effectivePlan === 'free' ? 1 : 999999),
+      maxCurrenciesPerTrip: hasUnlimitedAccess(effectivePlan) ? 999999 : (effectivePlan === 'free' ? 2 : 999999),
       canSplitExpenses: isProOrAbove,
       canExportReports: isProOrAbove,
       canAutoSettleDebts: isPremiumOrAbove,
@@ -1317,16 +1441,25 @@ export async function getUserSubscription(userId: string): Promise<UserSubscript
       flowConfigured: flowConfig.isConfigured,
       flowSandbox: flowConfig.isSandbox,
       flowEndpoint: flowConfig.endpoint,
+      demoCheckoutEnabled: isDemoCheckoutEnabled(),
     },
   };
 }
 
 // ============================================================================
-// DEMO OTP CONFIG HELPER
+// DEMO OTP CONFIG HELPER (Strictly disabled in Production)
 // ============================================================================
 export function getDemoOtpConfig() {
+  const isProd = process.env.NODE_ENV === 'production';
+  // Strictly forbid demo master OTP bypass in production environments
+  if (isProd) {
+    return {
+      demoOtpActive: false,
+      demoOtpCode: null,
+    };
+  }
   const rawDemo = (process.env.DEMO_OTP_CODE || '').trim();
-  const isDemoActive = rawDemo.length > 0;
+  const isDemoActive = rawDemo.length > 0 && process.env.ENABLE_DEMO_OTP === 'true';
   return {
     demoOtpActive: isDemoActive,
     demoOtpCode: isDemoActive ? rawDemo : null,
@@ -1334,11 +1467,25 @@ export function getDemoOtpConfig() {
 }
 
 // ============================================================================
-// EXPRESS APP INITIALIZATION
+// EXPRESS APP INITIALIZATION & SECURITY HEADERS (OWASP Top 10)
 // ============================================================================
 export const app = express();
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.disable('x-powered-by');
+
+// Defense-in-depth Security Headers Middleware (OWASP A05)
+app.use((req: Request, res: Response, next: NextFunction) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('X-XSS-Protection', '0');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  if (process.env.NODE_ENV === 'production') {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  next();
+});
+
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // ============================================================================
 // API ROUTES
@@ -1352,8 +1499,34 @@ app.get('/api/auth/config', (req: Request, res: Response) => {
   });
 });
 
-// 1. Health & Config Status (Checks Supabase + Brevo + Gemini + Flow + Demo Mode)
+// 1. Health & Config Status (Minimal generic in production; detailed diagnostics only with valid ADMIN_DEBUG_KEY)
 app.get('/api/health', async (req: Request, res: Response) => {
+  const isProd = process.env.NODE_ENV === 'production';
+  const adminDebugKey = (process.env.ADMIN_DEBUG_KEY || '').trim();
+  const providedDebugKey = (req.headers['x-admin-debug-key'] || req.query.debugKey || '').toString().trim();
+
+  let isAuthorizedForDiagnostics = !isProd;
+  if (isProd && adminDebugKey.length >= 16 && providedDebugKey.length > 0) {
+    try {
+      const a = Buffer.from(providedDebugKey);
+      const b = Buffer.from(adminDebugKey);
+      if (a.length === b.length && crypto.timingSafeEqual(a, b)) {
+        isAuthorizedForDiagnostics = true;
+      }
+    } catch {
+      isAuthorizedForDiagnostics = false;
+    }
+  }
+
+  // If in production and not authorized via ADMIN_DEBUG_KEY, return ONLY a clean generic status
+  if (!isAuthorizedForDiagnostics) {
+    return res.json({
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  // Detailed diagnostics for development or authorized owner with ADMIN_DEBUG_KEY
   const brevoDiagnostics = getBrevoKeyDiagnostics();
   const geminiDiagnostics = getGeminiKeyDiagnostics();
   let supabaseStatus = 'disconnected';
@@ -1396,21 +1569,36 @@ app.get('/api/health', async (req: Request, res: Response) => {
   });
 });
 
-// 2. Email Delivery Diagnostic Logs from Supabase
-app.get('/api/email-logs', async (req: Request, res: Response) => {
+// 2. Email Delivery Diagnostic Logs from Supabase (Strictly authenticated and owner-only)
+app.get('/api/email-logs', verifyAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
+    const userEmail = req.user?.email;
+    if (!isOwnerEmail(userEmail)) {
+      return res.status(403).json({
+        error: 'Acceso denegado. Solo el desarrollador/propietario verificado puede auditar registros de diagnóstico.',
+        code: 'FORBIDDEN',
+      });
+    }
+
     const supabase = getSupabase();
     const { data: logs } = await supabase
       .from('email_logs')
-      .select('*')
+      .select('id, to_email, subject, type, status, error, created_at')
       .order('created_at', { ascending: false })
       .limit(30);
+
+    // Sanitize and mask any sensitive fields (Never leak plain OTPs)
+    const sanitizedLogs = (logs || []).map((l: any) => ({
+      ...l,
+      to_email: l.to_email ? l.to_email.replace(/(?<=^.{2}).*(?=@)/, '***') : '***',
+      code: '******',
+    }));
 
     const brevoDiagnostics = getBrevoKeyDiagnostics();
     res.json({
       realEmailConfigured: brevoDiagnostics.clientInitialized,
       brevoDiagnostics,
-      logs: logs || [],
+      logs: sanitizedLogs,
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Error al obtener logs de correo.' });
@@ -1471,8 +1659,9 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
     const salt = await bcrypt.genSalt(10);
     const passwordHash = await bcrypt.hash(password, salt);
 
-    // Generate real cryptographically random 6-digit OTP
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    // Generate real cryptographically secure 6-digit OTP and store SHA-256 hash in DB
+    const code = generateSecureOtp();
+    const hashedCode = hashOtp(code);
     const expiresAt = Date.now() + 15 * 60 * 1000; // 15 mins
 
     let userId: string;
@@ -1485,7 +1674,7 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
         .update({
           name: userName,
           password_hash: passwordHash,
-          verification_code: code,
+          verification_code: hashedCode,
           verification_code_expires: expiresAt,
           home_currency: cleanHomeCurrency,
         })
@@ -1495,14 +1684,14 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
         throw new Error(`Error al actualizar usuario: ${updateError.message}`);
       }
     } else {
-      userId = 'usr_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+      userId = 'usr_' + Date.now() + '_' + crypto.randomBytes(4).toString('hex');
       const { error: insertError } = await supabase.from('users').insert({
         id: userId,
         name: userName,
         email: normalizedEmail,
         password_hash: passwordHash,
         is_verified: false,
-        verification_code: code,
+        verification_code: hashedCode,
         verification_code_expires: expiresAt,
         home_currency: cleanHomeCurrency,
         created_at: new Date().toISOString(),
@@ -1586,8 +1775,15 @@ app.post('/api/auth/verify-otp', async (req: Request, res: Response) => {
     const user = mapUserFromDb(userRow);
     const { demoOtpActive, demoOtpCode } = getDemoOtpConfig();
 
-    const isDemoMatch = Boolean(demoOtpActive && demoOtpCode && inputCode === demoOtpCode);
-    const isRealMatch = Boolean(user.verificationCode && user.verificationCode === inputCode);
+    // Constant-time OTP verification preventing timing attacks & production bypass
+    const isDemoMatch = Boolean(
+      process.env.NODE_ENV !== 'production' &&
+      process.env.ENABLE_DEMO_OTP === 'true' &&
+      demoOtpActive &&
+      demoOtpCode &&
+      inputCode === demoOtpCode
+    );
+    const isRealMatch = verifyOtpMatch(inputCode, user.verificationCode);
 
     if (!isDemoMatch && !isRealMatch) {
       const inc = otpRateLimiter.increment(rateKey);
@@ -1618,9 +1814,10 @@ app.post('/api/auth/verify-otp', async (req: Request, res: Response) => {
     }
 
     // Generate JWT Token (Expiration 7 days, with issued-at timestamp)
+    const jwtSecret = getJwtSecret();
     const token = jwt.sign(
       { id: user.id, email: user.email, name: user.name, iat: Math.floor(Date.now() / 1000) },
-      JWT_SECRET,
+      jwtSecret,
       { expiresIn: '7d' }
     );
 
@@ -1676,13 +1873,14 @@ app.post('/api/auth/resend-otp', async (req: Request, res: Response) => {
 
     resendOtpRateLimiter.increment(rateKey);
 
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const code = generateSecureOtp();
+    const hashedCode = hashOtp(code);
     const expiresAt = Date.now() + 15 * 60 * 1000;
 
     await supabase
       .from('users')
       .update({
-        verification_code: code,
+        verification_code: hashedCode,
         verification_code_expires: expiresAt,
       })
       .eq('id', userRow.id);
@@ -1770,9 +1968,10 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
       });
     }
 
+    const jwtSecret = getJwtSecret();
     const token = jwt.sign(
       { id: userRow.id, email: userRow.email, name: userRow.name, iat: Math.floor(Date.now() / 1000) },
-      JWT_SECRET,
+      jwtSecret,
       { expiresIn: '7d' }
     );
 
@@ -1828,13 +2027,14 @@ app.post('/api/auth/forgot-password', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'No encontramos ninguna cuenta con este correo.' });
     }
 
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const code = generateSecureOtp();
+    const hashedCode = hashOtp(code);
     const expiresAt = Date.now() + 15 * 60 * 1000;
 
     await supabase
       .from('users')
       .update({
-        verification_code: code,
+        verification_code: hashedCode,
         verification_code_expires: expiresAt,
       })
       .eq('id', userRow.id);
@@ -1863,6 +2063,8 @@ app.post('/api/auth/forgot-password', async (req: Request, res: Response) => {
 });
 
 // 8. Reset Password (with bcrypt hash, rate limiting, and instant session revocation)
+// SECURITY: Password reset NEVER accepts demo or master codes under any circumstance.
+// ONLY the cryptographic OTP sent to the user's specific email and hashed in database is accepted.
 app.post('/api/auth/reset-password', async (req: Request, res: Response) => {
   try {
     const { email, code, newPassword } = req.body;
@@ -1909,19 +2111,18 @@ app.post('/api/auth/reset-password', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Usuario no encontrado.' });
     }
 
-    const { demoOtpActive, demoOtpCode } = getDemoOtpConfig();
-    const isDemoMatch = Boolean(demoOtpActive && demoOtpCode && inputCode === demoOtpCode);
-    const isRealMatch = Boolean(userRow.verification_code && userRow.verification_code === inputCode);
+    // Strictly verify against the real cryptographic OTP hash stored in the database for this specific user
+    const isRealMatch = verifyOtpMatch(inputCode, userRow.verification_code);
 
-    if (!isDemoMatch && !isRealMatch) {
+    if (!isRealMatch) {
       const inc = resetPasswordRateLimiter.increment(rateKey);
       return res.status(400).json({
         error: `Código de recuperación inválido o incorrecto.${inc.remaining > 0 ? ` Intentos restantes: ${inc.remaining}` : ' Bloqueado por 15 minutos.'}`,
       });
     }
 
-    if (!isDemoMatch && userRow.verification_code_expires && Date.now() > Number(userRow.verification_code_expires)) {
-      return res.status(400).json({ error: 'El código ha expirado.' });
+    if (userRow.verification_code_expires && Date.now() > Number(userRow.verification_code_expires)) {
+      return res.status(400).json({ error: 'El código ha expirado. Por favor solicita un nuevo código.' });
     }
 
     // Reset rate limiter on success
@@ -2321,13 +2522,23 @@ app.post('/api/subscriptions/cancel', verifyAuth, async (req: AuthenticatedReque
 });
 
 // ============================================================================
-// TEMPORARY DEMO MODE: Immediate plan activation without Flow.cl checkout dependency
-// FLAG: DEMO_CHECKOUT_AUTO_ACTIVATE (Easily toggle off for live production Flow payments)
+// DEMO MODE CHECKOUT ACTIVATION (Requires DEMO_CHECKOUT_ENABLED='true')
+// OWASP A01: Broken Access Control & Financial Loss Prevention
 // ============================================================================
-export const DEMO_CHECKOUT_AUTO_ACTIVATE_ENABLED = true;
+export const isDemoCheckoutEnabled = (): boolean => {
+  return process.env.DEMO_CHECKOUT_ENABLED === 'true';
+};
 
 app.post('/api/subscriptions/demo-activate', verifyAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
+    // If DEMO_CHECKOUT_ENABLED is not configured as 'true', reject demo activation without exception
+    if (!isDemoCheckoutEnabled()) {
+      return res.status(403).json({
+        error: 'La activación simulada de planes está deshabilitada. Las suscripciones requieren pago verificado a través de la pasarela oficial Flow.',
+        code: 'DEMO_ACTIVATION_DISABLED',
+      });
+    }
+
     const userId = req.user!.id;
     const { plan = 'pro', billingCycle = 'monthly' } = req.body;
 
@@ -2367,7 +2578,7 @@ app.post('/api/subscriptions/demo-activate', verifyAuth, async (req: Authenticat
     try {
       const amount = plan === 'pro' ? (billingCycle === 'annual' ? 29990 : 2990) : (billingCycle === 'annual' ? 59990 : 5990);
       await supabase.from('subscription_orders').insert({
-        id: 'ord_demo_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+        id: 'ord_demo_' + Date.now() + '_' + crypto.randomBytes(4).toString('hex'),
         user_id: userId,
         commerce_order: `DEMO_${plan.toUpperCase()}_${Date.now()}`,
         plan,
@@ -2511,19 +2722,21 @@ app.post('/api/trips', verifyAuth, async (req: AuthenticatedRequest, res: Respon
     }
 
     // Check Plan Limits for creating new trip
-    const { count: currentTripsCount } = await supabase
-      .from('trips')
-      .select('*', { count: 'exact', head: true })
-      .eq('user_id', userId);
+    if (!hasUnlimitedAccess(userSub)) {
+      const { count: currentTripsCount } = await supabase
+        .from('trips')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', userId);
 
-    if ((currentTripsCount || 0) >= userSub.limits.maxActiveTrips) {
-      return res.status(403).json({
-        error:
-          'Límite del plan Gratis alcanzado: Puedes tener 1 viaje activo a la vez. Actualiza a Pro o Premium para crear viajes ilimitados.',
-        code: 'PLAN_LIMIT_EXCEEDED',
-        feature: 'unlimited_trips',
-        requiredPlan: 'pro',
-      });
+      if ((currentTripsCount || 0) >= userSub.limits.maxActiveTrips) {
+        return res.status(403).json({
+          error:
+            'Límite del plan Gratis alcanzado: Puedes tener 1 viaje activo a la vez. Actualiza a Pro o Premium para crear viajes ilimitados.',
+          code: 'PLAN_LIMIT_EXCEEDED',
+          feature: 'unlimited_trips',
+          requiredPlan: 'pro',
+        });
+      }
     }
 
     // Helper to insert or update trip with fallback if optional schema columns do not exist
@@ -2663,7 +2876,7 @@ app.post('/api/expenses', verifyAuth, async (req: AuthenticatedRequest, res: Res
       Array.isArray(expData.splitBetween) && expData.splitBetween.length > 0 ? expData.splitBetween : ['Yo'];
     const isSplitGroup = splitList.length > 1 || (expData.paidBy && expData.paidBy !== 'Yo');
 
-    if (isSplitGroup && !userSub.limits.canSplitExpenses) {
+    if (!hasUnlimitedAccess(userSub) && isSplitGroup && !userSub.limits.canSplitExpenses) {
       return res.status(403).json({
         error: 'La división de gastos entre viajeros está disponible en los planes Pro y Premium.',
         code: 'PLAN_LIMIT_EXCEEDED',
@@ -2817,9 +3030,9 @@ async function handleAiChat(req: AuthenticatedRequest, res: Response) {
     const userId = req.user!.id;
     const supabase = getSupabase();
 
-    // 1. Verify User Plan (Strict Pro or Premium check)
+    // 1. Verify User Plan (Strict Pro, Premium or Developer check)
     const subscription = await getUserSubscription(userId);
-    if (subscription.plan !== 'pro' && subscription.plan !== 'premium' || subscription.status !== 'active') {
+    if (!hasTierAccess(subscription, 'pro') || subscription.status !== 'active') {
       return res.status(403).json({
         error: 'El Asistente Inteligente de IA es una función exclusiva para planes Pro y Premium. Actualiza tu plan para recibir asesoría financiera personalizada y análisis de tus gastos de viaje.',
         code: 'PRO_PLAN_REQUIRED',
@@ -2827,9 +3040,9 @@ async function handleAiChat(req: AuthenticatedRequest, res: Response) {
       });
     }
 
-    // 2. Check Daily Message Quota (20 msgs/day for Pro, 50 msgs/day for Premium)
+    // 2. Check Daily Message Quota (Unlimited for Developer, 20 msgs/day for Pro, 50 msgs/day for Premium)
     const quotaCheck = dailyAiQuotaTracker.check(userId, subscription.plan);
-    if (!quotaCheck.allowed) {
+    if (!hasUnlimitedAccess(subscription) && !quotaCheck.allowed) {
       return res.status(429).json({
         error: `Llegaste al límite de mensajes de hoy (${quotaCheck.limit} mensajes/día en Plan ${subscription.plan.toUpperCase()}). Vuelve mañana para seguir consultando a tu Asistente de IA.`,
         code: 'DAILY_AI_LIMIT_REACHED',
@@ -3157,8 +3370,8 @@ app.post('/api/ai/scan-receipt', verifyAuth, async (req: AuthenticatedRequest, r
     const userId = req.user!.id;
     const userSub = await getUserSubscription(userId);
 
-    // 1. Verify Plan Permissions (Pro or Premium required)
-    if (userSub.plan === 'free') {
+    // 1. Verify Plan Permissions (Pro or Premium required, Developer unlimited)
+    if (!hasTierAccess(userSub, 'pro')) {
       return res.status(403).json({
         error: 'El escaneo inteligente de recibos con OCR es una función exclusiva de los planes Pro y Premium.',
         code: 'PLAN_LIMIT_EXCEEDED',
@@ -3280,7 +3493,7 @@ app.get('/api/fx/rates', verifyAuth, async (req: AuthenticatedRequest, res: Resp
     const userSub = await getUserSubscription(userId);
 
     // Verify Plan Permissions
-    if (userSub.plan === 'free') {
+    if (!hasTierAccess(userSub, 'pro')) {
       return res.status(403).json({
         error: 'Las tasas de cambio en tiempo real son exclusivas de los planes Pro y Premium.',
         code: 'PLAN_LIMIT_EXCEEDED',
@@ -3362,7 +3575,7 @@ app.get('/api/fx/historical', verifyAuth, async (req: AuthenticatedRequest, res:
     const userId = req.user!.id;
     const userSub = await getUserSubscription(userId);
 
-    if (userSub.plan === 'free') {
+    if (!hasTierAccess(userSub, 'pro')) {
       return res.status(403).json({
         error: 'El historial de tasas de cambio es exclusivo de los planes Pro y Premium.',
         code: 'PLAN_LIMIT_EXCEEDED',
@@ -3423,7 +3636,7 @@ app.post('/api/budget/alert-notification', verifyAuth, async (req: Authenticated
     const userName = req.user!.name || 'Viajero';
     const userSub = await getUserSubscription(userId);
 
-    if (userSub.plan === 'free') {
+    if (!hasTierAccess(userSub, 'pro')) {
       return res.status(403).json({
         error: 'Las alertas inteligentes de presupuesto son exclusivas de los planes Pro y Premium.',
         code: 'PLAN_LIMIT_EXCEEDED',
@@ -3517,7 +3730,7 @@ app.post('/api/sync/batch', verifyAuth, async (req: AuthenticatedRequest, res: R
     const userId = req.user!.id;
     const userSub = await getUserSubscription(userId);
 
-    if (userSub.plan === 'free') {
+    if (!hasTierAccess(userSub, 'pro')) {
       return res.status(403).json({
         error: 'La sincronización automática sin conexión es exclusiva de los planes Pro y Premium.',
         code: 'PLAN_LIMIT_EXCEEDED',
@@ -3669,7 +3882,7 @@ app.get('/api/banking/movements', verifyAuth, async (req: AuthenticatedRequest, 
     const userId = req.user!.id;
     const subscription = await getUserSubscription(userId);
 
-    if (subscription.plan !== 'premium' || subscription.status !== 'active') {
+    if (!hasTierAccess(subscription, 'premium') || subscription.status !== 'active') {
       return res.status(403).json({
         error: 'La sincronización bancaria automática es una función exclusiva del plan Premium.',
         code: 'PREMIUM_PLAN_REQUIRED',
@@ -3742,7 +3955,7 @@ app.post('/api/banking/import-to-expenses', verifyAuth, async (req: Authenticate
     const userId = req.user!.id;
     const subscription = await getUserSubscription(userId);
 
-    if (subscription.plan !== 'premium' || subscription.status !== 'active') {
+    if (!hasTierAccess(subscription, 'premium') || subscription.status !== 'active') {
       return res.status(403).json({
         error: 'La importación de movimientos bancarios es exclusiva del plan Premium.',
         code: 'PREMIUM_PLAN_REQUIRED',
@@ -3812,7 +4025,7 @@ app.post('/api/ai/proactive-advice', verifyAuth, async (req: AuthenticatedReques
     const userId = req.user!.id;
     const subscription = await getUserSubscription(userId);
 
-    if (subscription.plan !== 'premium' || subscription.status !== 'active') {
+    if (!hasTierAccess(subscription, 'premium') || subscription.status !== 'active') {
       return res.status(403).json({
         error: 'El Asistente Financiero Proactivo con alertas de ritmo de gasto es exclusivo del plan Premium.',
         code: 'PREMIUM_PLAN_REQUIRED',
@@ -4019,7 +4232,7 @@ app.post('/api/analytics/budget-projection', verifyAuth, async (req: Authenticat
     const userId = req.user!.id;
     const subscription = await getUserSubscription(userId);
 
-    if (subscription.plan !== 'premium' || subscription.status !== 'active') {
+    if (!hasTierAccess(subscription, 'premium') || subscription.status !== 'active') {
       return res.status(403).json({
         error: 'Las proyecciones presupuestarias comparativas entre viajes son exclusivas del plan Premium.',
         code: 'PREMIUM_PLAN_REQUIRED',

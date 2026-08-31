@@ -16,6 +16,7 @@ import {
 import { Trip, Expense, User, UserSubscription, BusinessTripMetadata } from '../types';
 import { formatMoney } from '../utils/finance';
 import { exportBusinessTripExpenseReportPDF } from '../utils/exportEngine';
+import { hasTierAccess } from '../data/plans';
 
 interface BusinessTripModalProps {
   isOpen: boolean;
@@ -40,7 +41,7 @@ export const BusinessTripModal: React.FC<BusinessTripModalProps> = ({
   onShowToast,
   onOpenPlans,
 }) => {
-  const isPremium = subscription?.plan === 'premium';
+  const isPremium = hasTierAccess(subscription, 'premium');
 
   const [companyName, setCompanyName] = useState(trip.businessMetadata?.companyName || 'Empresa S.A.');
   const [taxId, setTaxId] = useState(trip.businessMetadata?.taxId || '76.123.456-K');

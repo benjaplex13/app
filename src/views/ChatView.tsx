@@ -22,6 +22,7 @@ import Markdown from 'react-markdown';
 import { User, Trip, Expense, UserSubscription, ChatMessage, PlanTier } from '../types';
 import { api } from '../utils/api';
 import { formatMoney } from '../utils/finance';
+import { hasTierAccess, hasUnlimitedAccess } from '../data/plans';
 
 interface ChatViewProps {
   currentUser: User;
@@ -44,8 +45,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
   onShowToast,
   onOpenUpgradeGate,
 }) => {
-  const isProOrPremium = subscription?.plan === 'pro' || subscription?.plan === 'premium';
-  const defaultLimit = subscription?.plan === 'premium' ? 50 : 20;
+  const isDeveloper = hasUnlimitedAccess(subscription);
+  const isProOrPremium = hasTierAccess(subscription, 'pro');
+  const defaultLimit = isDeveloper ? 999999 : (subscription?.plan === 'premium' ? 50 : 20);
 
   const [selectedTripId, setSelectedTripId] = useState<string | null>(activeTrip?.id || (trips.length > 0 ? trips[0].id : null));
   const [inputMessage, setInputMessage] = useState('');
@@ -214,7 +216,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
               <div className="flex items-center space-x-2">
                 <h2 className="text-2xl font-bold font-display text-white">Rumbio AI Copilot</h2>
                 <span className={`text-[10px] font-bold uppercase tracking-widest px-2.5 py-0.5 rounded-full border ${
-                  subscription?.plan === 'premium'
+                  subscription?.plan === 'developer'
+                    ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+                    : subscription?.plan === 'premium'
                     ? 'bg-amber-500/20 text-amber-300 border-amber-500/30'
                     : subscription?.plan === 'pro'
                     ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/30'
@@ -232,23 +236,33 @@ export const ChatView: React.FC<ChatViewProps> = ({
           <div className="flex items-center gap-3">
             {/* Daily Message Quota Badge */}
             {isProOrPremium && (
-              <div 
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-2xl border text-xs font-medium transition ${
-                  isDailyLimitReached
-                    ? 'bg-rose-950/60 border-rose-500/40 text-rose-300'
-                    : (quotaInfo && quotaInfo.remaining <= 5)
-                    ? 'bg-amber-950/60 border-amber-500/40 text-amber-300'
-                    : 'bg-cyan-950/60 border-cyan-500/30 text-cyan-300'
-                }`}
-                title={`Límite diario: ${defaultLimit} mensajes por día para tu plan.`}
-              >
-                <Sparkles className="w-3.5 h-3.5" />
-                <span>
-                  {quotaInfo 
-                    ? `${quotaInfo.remaining} / ${quotaInfo.limit} msgs hoy`
-                    : `${defaultLimit} msgs/día`}
-                </span>
-              </div>
+              isDeveloper ? (
+                <div 
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-2xl border text-xs font-medium bg-emerald-950/60 border-emerald-500/30 text-emerald-300 shadow-sm"
+                  title="Acceso ilimitado Plan Developer (Sin límite de mensajes)"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Ilimitado (Developer)</span>
+                </div>
+              ) : (
+                <div 
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-2xl border text-xs font-medium transition ${
+                    isDailyLimitReached
+                      ? 'bg-rose-950/60 border-rose-500/40 text-rose-300'
+                      : (quotaInfo && quotaInfo.remaining <= 5)
+                      ? 'bg-amber-950/60 border-amber-500/40 text-amber-300'
+                      : 'bg-cyan-950/60 border-cyan-500/30 text-cyan-300'
+                  }`}
+                  title={`Límite diario: ${defaultLimit} mensajes por día para tu plan.`}
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>
+                    {quotaInfo 
+                      ? `${quotaInfo.remaining} / ${quotaInfo.limit} msgs hoy`
+                      : `${defaultLimit} msgs/día`}
+                  </span>
+                </div>
+              )
             )}
 
             {/* Trip selector for context */}

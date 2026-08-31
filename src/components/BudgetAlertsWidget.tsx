@@ -15,6 +15,7 @@ import { Trip, Expense, User, UserSubscription, ExpenseCategory } from '../types
 import { ALL_CATEGORIES } from '../data/currencies';
 import { convertToHomeCurrency, formatMoney, getCategoryBreakdown } from '../utils/finance';
 import { api } from '../utils/api';
+import { hasTierAccess } from '../data/plans';
 
 interface BudgetAlertsWidgetProps {
   trip: Trip;
@@ -33,7 +34,7 @@ export const BudgetAlertsWidget: React.FC<BudgetAlertsWidgetProps> = ({
   onOpenUpgradeGate,
   onShowToast,
 }) => {
-  const isPro = subscription ? subscription.plan !== 'free' : false;
+  const isPro = hasTierAccess(subscription, 'pro');
   const [emailAlertsEnabled, setEmailAlertsEnabled] = useState(() => {
     return localStorage.getItem(`rumbio_email_alerts_${currentUser.id}`) === 'true';
   });

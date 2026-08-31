@@ -17,6 +17,7 @@ import Markdown from 'react-markdown';
 import { User, Trip, Expense, UserSubscription, ChatMessage, PlanTier } from '../types';
 import { api } from '../utils/api';
 import { formatMoney } from '../utils/finance';
+import { hasTierAccess, hasUnlimitedAccess } from '../data/plans';
 
 interface AiChatFloatingWidgetProps {
   currentUser: User | null;
@@ -45,8 +46,9 @@ export const AiChatFloatingWidget: React.FC<AiChatFloatingWidgetProps> = ({
   const [isDailyLimitReached, setIsDailyLimitReached] = useState(false);
   const [quotaInfo, setQuotaInfo] = useState<{ limit: number; remaining: number } | null>(null);
 
-  const isProOrPremium = subscription?.plan === 'pro' || subscription?.plan === 'premium';
-  const defaultLimit = subscription?.plan === 'premium' ? 50 : 20;
+  const isDeveloper = hasUnlimitedAccess(subscription);
+  const isProOrPremium = hasTierAccess(subscription, 'pro');
+  const defaultLimit = isDeveloper ? 999999 : (subscription?.plan === 'premium' ? 50 : 20);
 
   const initialGreeting: ChatMessage = {
     id: 'floating-welcome',
@@ -169,7 +171,7 @@ export const AiChatFloatingWidget: React.FC<AiChatFloatingWidgetProps> = ({
           </div>
           <span className="text-xs tracking-wide hidden sm:inline">Asistente IA</span>
           <span className="text-[9px] font-extrabold uppercase px-1.5 py-0.5 rounded-full bg-cyan-950/80 text-cyan-300 border border-cyan-400/30">
-            {isProOrPremium ? 'PRO' : 'VIP'}
+            {isDeveloper ? 'DEV' : isProOrPremium ? 'PRO' : 'VIP'}
           </span>
         </button>
       )}
@@ -191,7 +193,11 @@ export const AiChatFloatingWidget: React.FC<AiChatFloatingWidgetProps> = ({
               <div>
                 <div className="flex items-center space-x-1.5">
                   <h4 className="text-xs font-bold text-white">Rumbio AI Copilot</h4>
-                  <span className="text-[9px] font-bold text-cyan-400 bg-cyan-950/80 border border-cyan-500/30 px-1.5 py-0.2 rounded-full">
+                  <span className={`text-[9px] font-bold border px-1.5 py-0.2 rounded-full ${
+                    isDeveloper 
+                      ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500/30'
+                      : 'bg-cyan-950/80 text-cyan-400 border-cyan-500/30'
+                  }`}>
                     {subscription?.plan?.toUpperCase() || 'PRO'}
                   </span>
                 </div>

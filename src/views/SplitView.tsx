@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { Trip, Expense, User, UserSubscription, CurrencyCode } from '../types';
 import { calculateSplitDebts, formatMoney, convertToHomeCurrency } from '../utils/finance';
+import { hasTierAccess, hasUnlimitedAccess } from '../data/plans';
 
 interface SplitViewProps {
   trip: Trip;
@@ -51,9 +52,9 @@ export const SplitView: React.FC<SplitViewProps> = ({
   const [showExplainGuide, setShowExplainGuide] = useState(false);
   const [settlementCurrency, setSettlementCurrency] = useState<CurrencyCode>(currentUser.homeCurrency);
 
-  const canSplit = userSubscription?.limits.canSplitExpenses ?? true;
-  const canAutoSettle = userSubscription?.limits.canAutoSettleDebts ?? false;
-  const isPremium = userSubscription?.plan === 'premium';
+  const canSplit = hasUnlimitedAccess(userSubscription) || (userSubscription?.limits.canSplitExpenses ?? true);
+  const canAutoSettle = hasUnlimitedAccess(userSubscription) || (userSubscription?.limits.canAutoSettleDebts ?? false);
+  const isPremium = hasTierAccess(userSubscription, 'premium');
 
   const { settlements, balances, totalSpent } = calculateSplitDebts(expenses, trip, settlementCurrency);
 
