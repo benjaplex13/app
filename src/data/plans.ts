@@ -143,6 +143,7 @@ export const PLANS_DATA: PlanPricing[] = [
       { text: 'Hasta 2 viajes activos', included: true },
       { text: 'Hasta 2 divisas por viaje con tasa fija', included: true },
       { text: 'Presupuesto por categoría básico', included: true },
+      { text: 'Hasta 15 gastos por viaje', included: true },
       { text: 'Checklist de viaje y notas', included: true },
       { text: 'Escaneo de recibos con OCR inteligente', included: false },
       { text: 'Modo sin conexión con sincronización automática', included: false },
