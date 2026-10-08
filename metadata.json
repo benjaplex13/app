@@ -1,0 +1,6 @@
+{
+  "name": "Rumbio",
+  "description": "Aplicación profesional de finanzas y presupuestos de viajes con multidivisas, división de gastos y conversión en vivo.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
